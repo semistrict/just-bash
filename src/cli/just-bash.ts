@@ -51,6 +51,7 @@ interface CliOptions {
   errexit: boolean;
   allowWrite: boolean;
   python: boolean;
+  javascript: boolean;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -71,6 +72,7 @@ Options:
   --cwd <path>      Working directory within the sandbox (default: project mount point)
   --allow-write     Allow write operations (default: read-only)
   --python          Enable python3/python commands (disabled by default)
+  --javascript      Enable js-exec command (disabled by default)
   --json            Output results as JSON (stdout, stderr, exitCode)
   -h, --help        Show this help message
   -v, --version     Show version
@@ -118,6 +120,7 @@ function parseArgs(args: string[]): CliOptions {
     errexit: false,
     allowWrite: false,
     python: false,
+    javascript: false,
     json: false,
     help: false,
     version: false,
@@ -166,6 +169,9 @@ function parseArgs(args: string[]): CliOptions {
       i++;
     } else if (arg === "--python") {
       options.python = true;
+      i++;
+    } else if (arg === "--javascript") {
+      options.javascript = true;
       i++;
     } else if (arg.startsWith("-")) {
       // Handle combined short options like -ec
@@ -311,6 +317,7 @@ async function main(): Promise<void> {
     fs,
     cwd,
     python: options.python,
+    javascript: options.javascript,
   });
 
   // Prepend set -e if errexit is enabled

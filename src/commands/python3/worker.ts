@@ -284,7 +284,7 @@ interface EmscriptenPATH {
 }
 
 function createHOSTFS(
-  backend: SyncFsBackend,
+  backend: SyncBackend,
   FS: EmscriptenFS,
   PATH: EmscriptenPATH,
 ) {
