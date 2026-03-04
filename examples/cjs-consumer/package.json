@@ -1,0 +1,12 @@
+{
+  "name": "cjs-consumer-example",
+  "version": "1.0.0",
+  "description": "Example of using just-bash from a CommonJS project",
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "just-bash": "file:../.."
+  }
+}

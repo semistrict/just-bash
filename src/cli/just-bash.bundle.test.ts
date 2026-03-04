@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -114,4 +115,17 @@ describe("just-bash bundled binary", () => {
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
   }, 60000); // 60s timeout for first Pyodide load
+});
+
+describe("just-bash CJS bundle", () => {
+  it("should be requireable and execute basic commands", async () => {
+    const cjsBundlePath = resolve(__dirname, "../../dist/bundle/index.cjs");
+    const require = createRequire(import.meta.url);
+    const mod = require(cjsBundlePath);
+    expect(mod.Bash).toBeDefined();
+    const bash = new mod.Bash();
+    const result = await bash.exec("echo hello from cjs");
+    expect(result.stdout).toBe("hello from cjs\n");
+    expect(result.exitCode).toBe(0);
+  });
 });

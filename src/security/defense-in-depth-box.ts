@@ -63,9 +63,15 @@ function generateUUID(): string {
 }
 
 /**
- * Dynamically import AsyncLocalStorage only in Node.js environments.
- * This avoids bundler errors in browser builds.
+ * Import AsyncLocalStorage directly from node:async_hooks.
+ * This is safe because:
+ * - The Node.js entry point targets Node.js where async_hooks is always available
+ * - Edge runtimes should use just-bash/browser which doesn't include security features
+ * - The IS_BROWSER guard still prevents usage in browser builds
+ * - async_hooks is external in all esbuild configs (--platform=node)
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 type AsyncLocalStorageType<T> = {
   run<R>(store: T, callback: () => R): R;
   getStore(): T | undefined;
@@ -74,24 +80,11 @@ type AsyncLocalStorageType<T> = {
 let AsyncLocalStorageClass: (new <T>() => AsyncLocalStorageType<T>) | null =
   null;
 
-// Only load AsyncLocalStorage in Node.js (not in browser builds)
+// Only use AsyncLocalStorage in Node.js (not in browser builds)
 if (!IS_BROWSER) {
-  try {
-    // Use createRequire for ESM compatibility (require is not defined in ESM)
-    // This approach works in both CJS and ESM Node.js environments
-    const { createRequire } = await import("node:module");
-    const require = createRequire(import.meta.url);
-    const asyncHooks = require("node:async_hooks");
-    AsyncLocalStorageClass = asyncHooks.AsyncLocalStorage;
-  } catch (e) {
-    // AsyncLocalStorage not available (e.g., in some edge runtimes)
-    console.warn(
-      "[DefenseInDepthBox] WARNING: AsyncLocalStorage not available, defense-in-depth security layer is DISABLED. " +
-        "This means script execution will NOT be protected by runtime security patches. " +
-        "Reason:",
-      e instanceof Error ? e.message : e,
-    );
-  }
+  AsyncLocalStorageClass = AsyncLocalStorage as unknown as
+    | (new <T>() => AsyncLocalStorageType<T>)
+    | null;
 }
 
 /**

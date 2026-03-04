@@ -36,3 +36,11 @@ jobs:
       - name: Typecheck example
         run: pnpm typecheck
         working-directory: examples/bash-agent
+
+      - name: Install CJS example dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: examples/cjs-consumer
+
+      - name: Typecheck CJS example
+        run: npx tsc --noEmit
+        working-directory: examples/cjs-consumer
