@@ -41,14 +41,14 @@ describe("python3 security", () => {
   });
 
   describe("process spawn blocking", () => {
-    it("should return -1 from os.system (no-op)", async () => {
+    it("should block os.system", async () => {
       const env = new Bash({ python: true });
       const result = await env.exec(
         "python3 -c \"import os; print(os.system('echo pwned'))\"",
       );
-      expect(result.stdout).toBe("-1\n");
+      // os.system is blocked: child_process require is blocked by defense-in-depth
       expect(result.stdout).not.toContain("pwned");
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode).not.toBe(0);
     });
 
     it("should block subprocess.run", async () => {
@@ -274,6 +274,57 @@ EOF`);
       const result = await env.exec("python3 /tmp/test_jb_http.py");
       expect(result.stdout).toContain("OK");
       expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("module name validation", () => {
+    it("should reject module names with quotes", async () => {
+      const env = new Bash({ python: true });
+      const result = await env.exec(
+        'python3 -m "os\'; import sys; sys.exit(42); #"',
+      );
+      expect(result.exitCode).not.toBe(42);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("No module named");
+    });
+
+    it("should reject module names with newlines", async () => {
+      const env = new Bash({ python: true });
+      // Newlines would break out of the string if not validated
+      const result = await env.exec('python3 -m "os\nimport os"');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("No module named");
+    });
+
+    it("should reject module names with special characters", async () => {
+      const env = new Bash({ python: true });
+      const result = await env.exec('python3 -m "os; import sys"');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("No module named");
+    });
+
+    it(
+      "should allow valid dotted module names",
+      { timeout: 60000 },
+      async () => {
+        const env = new Bash({ python: true });
+        // platform is a stdlib module that prints platform info
+        const result = await env.exec("python3 -m platform");
+        expect(result.stdout).toContain("Emscripten");
+        expect(result.exitCode).toBe(0);
+      },
+    );
+  });
+
+  describe("timeout worker termination (Fix 2)", () => {
+    it("should terminate worker on timeout", { timeout: 60000 }, async () => {
+      const env = new Bash({
+        python: true,
+        executionLimits: { maxPythonTimeoutMs: 2000 },
+      });
+      const result = await env.exec('python3 -c "import time; time.sleep(30)"');
+      expect(result.stderr).toContain("timeout");
+      expect(result.exitCode).not.toBe(0);
     });
   });
 });

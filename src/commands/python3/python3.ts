@@ -144,6 +144,7 @@ function parseArgs(args: string[]): ParsedArgs | ExecResult {
 type QueuedExecution = {
   input: WorkerInput;
   resolve: (result: WorkerOutput) => void;
+  workerRef?: { current: Worker | null };
 };
 const executionQueue: QueuedExecution[] = [];
 let isExecuting = false;
@@ -168,6 +169,8 @@ function processNextExecution(): void {
   const worker = new Worker(workerPath, {
     workerData: next.input,
   });
+
+  if (next.workerRef) next.workerRef.current = worker;
 
   worker.on("message", (msg: WorkerOutput & { type?: string }) => {
     // Filter out defense-in-depth security violation messages
@@ -223,8 +226,11 @@ async function executePython(
     scriptPath,
   };
 
+  const workerRef: { current: Worker | null } = { current: null };
+
   const workerPromise = new Promise<WorkerOutput>((resolve) => {
     const timeout = setTimeout(() => {
+      workerRef.current?.terminate();
       resolve({
         success: false,
         error: `Execution timeout: exceeded ${timeoutMs}ms limit`,
@@ -237,12 +243,20 @@ async function executePython(
     };
 
     // Queue the execution (serialized — one at a time per worker)
-    executionQueue.push({ input: workerInput, resolve: wrappedResolve });
+    executionQueue.push({
+      input: workerInput,
+      resolve: wrappedResolve,
+      workerRef,
+    });
     processNextExecution();
   });
 
   const [bridgeOutput, workerResult] = await Promise.all([
-    bridgeHandler.run(timeoutMs),
+    bridgeHandler.run(timeoutMs).catch((e) => ({
+      stdout: "",
+      stderr: `python3: bridge error: ${(e as Error).message}\n`,
+      exitCode: 1,
+    })),
     workerPromise.catch((e) => ({
       success: false,
       error: (e as Error).message,
@@ -286,6 +300,15 @@ export const python3Command: Command = {
       pythonCode = parsed.code;
       scriptPath = "-c";
     } else if (parsed.module !== null) {
+      // Strict validation: only allow valid Python module names
+      // (alphanumeric, underscores, dots for submodules)
+      if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(parsed.module)) {
+        return {
+          stdout: "",
+          stderr: `python3: No module named '${parsed.module.slice(0, 200)}'\n`,
+          exitCode: 1,
+        };
+      }
       pythonCode = `import runpy; runpy.run_module('${parsed.module}', run_name='__main__')`;
       scriptPath = parsed.module;
     } else if (parsed.scriptFile !== null) {

@@ -36,6 +36,57 @@ export interface WorkerOutput {
 }
 
 const require = createRequire(import.meta.url);
+
+// Module._load protection: block dangerous require() calls at file load time,
+// BEFORE python.cjs is loaded. This closes the initialization window where
+// Emscripten callbacks could call require() unrestricted.
+// ESM imports (import { ... } from "...") are unaffected by Module._load.
+try {
+  // biome-ignore lint/complexity/noBannedTypes: Module._load signature is untyped
+  const NodeModule = require("node:module") as { _load: Function };
+  if (typeof NodeModule._load === "function") {
+    const originalLoad = NodeModule._load;
+    const blockedModules = new Set([
+      "child_process",
+      "node:child_process",
+      "cluster",
+      "node:cluster",
+      "dgram",
+      "node:dgram",
+      "dns",
+      "node:dns",
+      "net",
+      "node:net",
+      "tls",
+      "node:tls",
+      "vm",
+      "node:vm",
+      "v8",
+      "node:v8",
+      "inspector",
+      "node:inspector",
+      "inspector/promises",
+      "node:inspector/promises",
+      "trace_events",
+      "node:trace_events",
+      "perf_hooks",
+      "node:perf_hooks",
+      "worker_threads",
+      "node:worker_threads",
+    ]);
+    NodeModule._load = function (request: string, ...rest: unknown[]) {
+      if (blockedModules.has(request)) {
+        throw new Error(
+          `[Defense-in-depth] require('${request}') is blocked in worker context`,
+        );
+      }
+      return originalLoad.apply(this, [request, ...rest]);
+    };
+  }
+} catch {
+  /* best-effort */
+}
+
 let cpythonDir: string;
 try {
   cpythonDir = dirname(
@@ -1259,6 +1310,8 @@ function activateDefense(): void {
       parentPort?.postMessage({ type: "security-violation", violation: v });
     },
   });
+  // Module._load protection is installed at file scope (top of file),
+  // before python.cjs loads, so it's already active here.
 }
 
 // Catch unhandled errors in the worker
