@@ -13,13 +13,13 @@ dependencies:
     version: 6.0.87(zod@4.3.6)
   bash-tool:
     specifier: ^1.3.13
-    version: 1.3.15(ai@6.0.87)(just-bash@2.11.14)
+    version: 1.3.15(ai@6.0.87)(just-bash@2.11.15)
   geist:
     specifier: ^1.5.1
     version: 1.7.0(next@16.2.0-canary.26)
   just-bash:
-    specifier: ^2.11.14
-    version: 2.11.14
+    specifier: ^2.11.15
+    version: 2.11.15
   next:
     specifier: 16.2.0-canary.26
     version: 16.2.0-canary.26(@babel/core@7.29.0)(react-dom@19.2.3)(react@19.2.3)
@@ -1508,7 +1508,7 @@ packages:
     resolution: {integrity: sha512-ipDqC8FrAl/76p2SSWKSI+H9tFwm7vYqXQrItCuiVPt26Km0jS+NzSsBWAaBusvSbQcfJG+JitdMm+wZAgTYqg==}
     hasBin: true
 
-  /bash-tool@1.3.15(ai@6.0.87)(just-bash@2.11.14):
+  /bash-tool@1.3.15(ai@6.0.87)(just-bash@2.11.15):
     resolution: {integrity: sha512-rsUxbwTO1qU9LxLhsqu7d5MfoJAqWgw0+E1uDEHLxrZRcXXayZspgiqTSXwGM2yuCz6N42duMdbF95o5ZSw8lQ==}
     engines: {node: '>=18'}
     peerDependencies:
@@ -1524,7 +1524,7 @@ packages:
       ai: 6.0.87(zod@4.3.6)
       fast-glob: 3.3.3
       gray-matter: 4.0.3
-      just-bash: 2.11.14
+      just-bash: 2.11.15
       zod: 3.25.76
     dev: false
 
@@ -2929,8 +2929,8 @@ packages:
       object.values: 1.2.1
     dev: true
 
-  /just-bash@2.11.14:
-    resolution: {integrity: sha512-epYTwvaGBY5Yr8dw89oWt33x5IIDX2XoGGhnOeKpXDgpvsk3d6EVPcSuhTElCL5cGDIcDOy64qbbw/dWPr8lNw==}
+  /just-bash@2.11.15:
+    resolution: {integrity: sha512-TPxjyF9OMbMKjiQ2CS6mBo0/t8lilWGBVmp45c3GlecyV9dMmQoxlHRMoyF9jWg93PzDD4UfHBBX9XY+OdOW8A==}
     hasBin: true
     dependencies:
       compressjs: 1.0.3
