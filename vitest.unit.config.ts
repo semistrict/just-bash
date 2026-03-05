@@ -9,6 +9,7 @@ export default defineConfig({
       "**/dist/**",
       "**/comparison-tests/**",
       "**/python3/**",
+      "**/python-scripting*",
     ],
   },
 });
