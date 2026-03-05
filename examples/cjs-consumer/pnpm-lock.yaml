@@ -553,7 +553,5 @@ packages:
       '@mongodb-js/zstd': 7.0.0
       node-liblzma: 2.2.0
     transitivePeerDependencies:
-      - bufferutil
       - supports-color
-      - utf-8-validate
     dev: false

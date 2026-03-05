@@ -41,14 +41,15 @@ describe("python3 security", () => {
   });
 
   describe("process spawn blocking", () => {
-    it("should block os.system", async () => {
+    it("should return -1 from os.system (no-op at Emscripten level)", async () => {
       const env = new Bash({ python: true });
       const result = await env.exec(
         "python3 -c \"import os; print(os.system('echo pwned'))\"",
       );
-      // os.system is blocked: child_process require is blocked by defense-in-depth
+      // os.system returns -1: patched at Emscripten level, never calls child_process
+      expect(result.stdout).toBe("-1\n");
       expect(result.stdout).not.toContain("pwned");
-      expect(result.exitCode).not.toBe(0);
+      expect(result.exitCode).toBe(0);
     });
 
     it("should block subprocess.run", async () => {
