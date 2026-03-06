@@ -23,6 +23,7 @@ export default defineConfig({
       ["forks", "**/security/defense-in-depth-box*.test.ts"],
       ["forks", "**/browser.bundle.test.ts"],
       ["forks", "**/python3*.test.ts"],
+      ["forks", "**/python-scripting.test.ts"],
     ],
     coverage: {
       provider: "v8",
