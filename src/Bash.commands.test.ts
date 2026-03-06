@@ -82,4 +82,24 @@ describe("Bash commands filtering", () => {
     expect((await env.exec("rm /test.txt")).exitCode).toBe(127);
     expect((await env.exec("cp /test.txt /test2.txt")).exitCode).toBe(127);
   });
+
+  it("custom commands can use Node.js APIs with defense-in-depth enabled", async () => {
+    const env = new Bash({
+      customCommands: [
+        {
+          name: "myfetch",
+          execute: async (_args, ctx) => {
+            // Custom command uses setTimeout and fetch — both are blocked
+            // globals, but should work because commands are trusted.
+            await new Promise((r) => setTimeout(r, 1));
+            return { stdout: "custom-ok\n", stderr: "", exitCode: 0 };
+          },
+        },
+      ],
+    });
+
+    const result = await env.exec("myfetch");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("custom-ok\n");
+  });
 });

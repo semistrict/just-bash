@@ -7,6 +7,7 @@
 
 import { isBrowserExcludedCommand } from "../commands/browser-excluded.js";
 import { sanitizeErrorMessage } from "../fs/sanitize-error.js";
+import { DefenseInDepthBox } from "../security/defense-in-depth-box.js";
 import type { CommandContext, ExecResult } from "../types.js";
 import {
   handleBreak,
@@ -432,7 +433,12 @@ export async function executeExternalCommand(
   };
 
   try {
-    return await cmd.execute(args, cmdCtx);
+    // Commands (including custom/host-provided ones) are trusted code.
+    // Run as trusted so they can use Node.js APIs (fetch, setTimeout, etc.)
+    // without being blocked by defense-in-depth.
+    return await DefenseInDepthBox.runTrustedAsync(() =>
+      cmd.execute(args, cmdCtx),
+    );
   } catch (error) {
     // ExecutionLimitError must propagate - these are safety limits
     if (error instanceof ExecutionLimitError) {
