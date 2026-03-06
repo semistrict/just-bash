@@ -1,4 +1,8 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -11,7 +15,7 @@ export default defineConfig({
     ],
     pool: "threads",
     isolate: false,
-    setupFiles: ["./src/test-setup.ts"],
+    setupFiles: [resolve(__dirname, "src/test-setup.ts")],
     // Tests that spawn workers (sqlite3, python) need process-level isolation
     // because defense-in-depth patches globalThis which is shared across threads.
     poolMatchGlobs: [
