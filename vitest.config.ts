@@ -15,14 +15,14 @@ export default defineConfig({
     ],
     pool: "threads",
     isolate: false,
-    setupFiles: [resolve(__dirname, "src/test-setup.ts")],
+    setupFiles: [resolve(__dirname, "src/vitest-setup.ts")],
     // Tests that spawn workers (sqlite3, python) need process-level isolation
     // because defense-in-depth patches globalThis which is shared across threads.
     poolMatchGlobs: [
       ["forks", "**/security/attacks/**"],
       ["forks", "**/security/defense-in-depth-box*.test.ts"],
       ["forks", "**/browser.bundle.test.ts"],
-      ["forks", "**/python3.worker-protocol-abuse.test.ts"],
+      ["forks", "**/python3*.test.ts"],
     ],
     coverage: {
       provider: "v8",
