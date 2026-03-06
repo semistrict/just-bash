@@ -75,7 +75,7 @@
     "test:run": "vitest run --exclude src/security/fuzzing/ --exclude src/commands/python3/ --exclude src/agent-examples/python-scripting.test.ts",
     "test:dist": "vitest run src/cli/just-bash.bundle.test.ts",
     "test:unit": "vitest run --config vitest.unit.config.ts",
-    "test:python": "vitest run src/commands/python3/ src/agent-examples/python-scripting.test.ts",
+    "test:python": "vitest run --config vitest.python.config.ts",
     "test:comparison": "vitest run --config vitest.comparison.config.ts",
     "test:comparison:record": "RECORD_FIXTURES=1 vitest run --config vitest.comparison.config.ts",
     "test:coverage": "vitest run --coverage",
