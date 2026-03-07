@@ -52,7 +52,17 @@ export const catCommand: Command = {
       }
     }
 
-    return { stdout, stderr: readResult.stderr, exitCode: readResult.exitCode };
+    // Only use binary encoding when reading actual files (not just stdin).
+    // When reading from stdin (heredoc, here-string, pipeline text), the
+    // content may be Unicode text that needs UTF-8 encoding for file writes.
+    // File content is read with binary encoding and needs binary to preserve bytes.
+    const isReadingFiles = files.length > 0 && files.some((f) => f !== "-");
+    return {
+      stdout,
+      stderr: readResult.stderr,
+      exitCode: readResult.exitCode,
+      ...(isReadingFiles ? { stdoutEncoding: "binary" as const } : {}),
+    };
   },
 };
 
