@@ -1844,7 +1844,6 @@ export class Lexer {
 
       // Read until we find the delimiter on its own line
       while (this.pos < this.input.length) {
-        const _lineStart = this.pos;
         let line = "";
 
         // Read one line

@@ -1,3 +1,4 @@
+import { sanitizeErrorMessage } from "../../fs/sanitize-error.js";
 import { getErrorMessage } from "../../interpreter/helpers/errors.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { parseArgs } from "../../utils/args.js";
@@ -61,7 +62,7 @@ export const rmCommand: Command = {
           ) {
             stderr += `rm: cannot remove '${path}': Directory not empty\n`;
           } else {
-            stderr += `rm: cannot remove '${path}': ${message}\n`;
+            stderr += `rm: cannot remove '${path}': ${sanitizeErrorMessage(message)}\n`;
           }
           exitCode = 1;
         }

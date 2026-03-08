@@ -1,3 +1,4 @@
+import { sanitizeErrorMessage } from "../../fs/sanitize-error.js";
 import { getErrorMessage } from "../../interpreter/helpers/errors.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { parseArgs } from "../../utils/args.js";
@@ -47,7 +48,7 @@ export const mkdirCommand: Command = {
         ) {
           stderr += `mkdir: cannot create directory '${dir}': File exists\n`;
         } else {
-          stderr += `mkdir: cannot create directory '${dir}': ${message}\n`;
+          stderr += `mkdir: cannot create directory '${dir}': ${sanitizeErrorMessage(message)}\n`;
         }
         exitCode = 1;
       }

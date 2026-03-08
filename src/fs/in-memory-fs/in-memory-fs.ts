@@ -19,6 +19,18 @@ import type {
   SymlinkEntry,
   WriteFileOptions,
 } from "../interface.js";
+import {
+  DEFAULT_DIR_MODE,
+  DEFAULT_FILE_MODE,
+  dirname,
+  joinPath,
+  MAX_SYMLINK_DEPTH,
+  normalizePath,
+  resolvePath,
+  resolveSymlinkTarget,
+  SYMLINK_MODE,
+  validatePath,
+} from "../path-utils.js";
 
 // Re-export for backwards compatibility
 export type {
@@ -54,22 +66,16 @@ function isFileInit(
   );
 }
 
-/**
- * Validate that a path does not contain null bytes.
- * Null bytes in paths can be used to truncate filenames or bypass security filters.
- */
-function validatePath(path: string, operation: string): void {
-  if (path.includes("\0")) {
-    throw new Error(`ENOENT: path contains null byte, ${operation} '${path}'`);
-  }
-}
-
 export class InMemoryFs implements IFileSystem {
   private data: Map<string, FsEntry> = new Map();
 
   constructor(initialFiles?: InitialFiles) {
     // Create root directory
-    this.data.set("/", { type: "directory", mode: 0o755, mtime: new Date() });
+    this.data.set("/", {
+      type: "directory",
+      mode: DEFAULT_DIR_MODE,
+      mtime: new Date(),
+    });
 
     if (initialFiles) {
       for (const [path, value] of Object.entries(initialFiles)) {
@@ -90,48 +96,17 @@ export class InMemoryFs implements IFileSystem {
     }
   }
 
-  private normalizePath(path: string): string {
-    // Handle empty or just slash
-    if (!path || path === "/") return "/";
-
-    // Remove trailing slash
-    let normalized =
-      path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
-
-    // Ensure starts with /
-    if (!normalized.startsWith("/")) {
-      normalized = `/${normalized}`;
-    }
-
-    // Resolve . and ..
-    const parts = normalized.split("/").filter((p) => p && p !== ".");
-    const resolved: string[] = [];
-
-    for (const part of parts) {
-      if (part === "..") {
-        resolved.pop();
-      } else {
-        resolved.push(part);
-      }
-    }
-
-    return `/${resolved.join("/")}` || "/";
-  }
-
-  private dirname(path: string): string {
-    const normalized = this.normalizePath(path);
-    if (normalized === "/") return "/";
-    const lastSlash = normalized.lastIndexOf("/");
-    return lastSlash === 0 ? "/" : normalized.slice(0, lastSlash);
-  }
-
   private ensureParentDirs(path: string): void {
-    const dir = this.dirname(path);
+    const dir = dirname(path);
     if (dir === "/") return;
 
     if (!this.data.has(dir)) {
       this.ensureParentDirs(dir);
-      this.data.set(dir, { type: "directory", mode: 0o755, mtime: new Date() });
+      this.data.set(dir, {
+        type: "directory",
+        mode: DEFAULT_DIR_MODE,
+        mtime: new Date(),
+      });
     }
   }
 
@@ -143,7 +118,7 @@ export class InMemoryFs implements IFileSystem {
     metadata?: { mode?: number; mtime?: Date },
   ): void {
     validatePath(path, "write");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     this.ensureParentDirs(normalized);
 
     // Store content - convert to Uint8Array for internal storage
@@ -153,7 +128,7 @@ export class InMemoryFs implements IFileSystem {
     this.data.set(normalized, {
       type: "file",
       content: buffer,
-      mode: metadata?.mode ?? 0o644,
+      mode: metadata?.mode ?? DEFAULT_FILE_MODE,
       mtime: metadata?.mtime ?? new Date(),
     });
   }
@@ -168,13 +143,13 @@ export class InMemoryFs implements IFileSystem {
     metadata?: { mode?: number; mtime?: Date },
   ): void {
     validatePath(path, "write");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     this.ensureParentDirs(normalized);
 
     this.data.set(normalized, {
       type: "file",
       lazy,
-      mode: metadata?.mode ?? 0o644,
+      mode: metadata?.mode ?? DEFAULT_FILE_MODE,
       mtime: metadata?.mtime ?? new Date(),
     });
   }
@@ -255,7 +230,7 @@ export class InMemoryFs implements IFileSystem {
     options?: WriteFileOptions | BufferEncoding,
   ): Promise<void> {
     validatePath(path, "append");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     const existing = this.data.get(normalized);
 
     if (existing && existing.type === "directory") {
@@ -395,22 +370,12 @@ export class InMemoryFs implements IFileSystem {
     };
   }
 
-  // Helper to resolve symlink target paths
-  private resolveSymlink(symlinkPath: string, target: string): string {
-    if (target.startsWith("/")) {
-      return this.normalizePath(target);
-    }
-    // Relative target: resolve from symlink's directory
-    const dir = this.dirname(symlinkPath);
-    return this.normalizePath(dir === "/" ? `/${target}` : `${dir}/${target}`);
-  }
-
   /**
    * Resolve symlinks in intermediate path components only (not the final component).
    * Used by lstat which should not follow the final symlink.
    */
   private resolveIntermediateSymlinks(path: string): string {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     if (normalized === "/") return "/";
 
     const parts = normalized.slice(1).split("/");
@@ -426,7 +391,7 @@ export class InMemoryFs implements IFileSystem {
 
       let entry = this.data.get(resolvedPath);
       let loopCount = 0;
-      const maxLoops = 40;
+      const maxLoops = MAX_SYMLINK_DEPTH;
 
       while (entry && entry.type === "symlink" && loopCount < maxLoops) {
         if (seen.has(resolvedPath)) {
@@ -435,7 +400,7 @@ export class InMemoryFs implements IFileSystem {
           );
         }
         seen.add(resolvedPath);
-        resolvedPath = this.resolveSymlink(resolvedPath, entry.target);
+        resolvedPath = resolveSymlinkTarget(resolvedPath, entry.target);
         entry = this.data.get(resolvedPath);
         loopCount++;
       }
@@ -457,7 +422,7 @@ export class InMemoryFs implements IFileSystem {
    * would resolve to /home/user/subdir/file.txt
    */
   private resolvePathWithSymlinks(path: string): string {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     if (normalized === "/") return "/";
 
     const parts = normalized.slice(1).split("/");
@@ -470,7 +435,7 @@ export class InMemoryFs implements IFileSystem {
       // Check if this path component is a symlink
       let entry = this.data.get(resolvedPath);
       let loopCount = 0;
-      const maxLoops = 40; // Prevent infinite loops
+      const maxLoops = MAX_SYMLINK_DEPTH; // Prevent infinite loops
 
       while (entry && entry.type === "symlink" && loopCount < maxLoops) {
         if (seen.has(resolvedPath)) {
@@ -481,7 +446,7 @@ export class InMemoryFs implements IFileSystem {
         seen.add(resolvedPath);
 
         // Resolve the symlink
-        resolvedPath = this.resolveSymlink(resolvedPath, entry.target);
+        resolvedPath = resolveSymlinkTarget(resolvedPath, entry.target);
         entry = this.data.get(resolvedPath);
         loopCount++;
       }
@@ -505,7 +470,7 @@ export class InMemoryFs implements IFileSystem {
    */
   mkdirSync(path: string, options?: MkdirOptions): void {
     validatePath(path, "mkdir");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     if (this.data.has(normalized)) {
       const entry = this.data.get(normalized);
@@ -519,7 +484,7 @@ export class InMemoryFs implements IFileSystem {
       return; // With -p, silently succeed if directory exists
     }
 
-    const parent = this.dirname(normalized);
+    const parent = dirname(normalized);
     if (parent !== "/" && !this.data.has(parent)) {
       if (options?.recursive) {
         this.mkdirSync(parent, { recursive: true });
@@ -530,7 +495,7 @@ export class InMemoryFs implements IFileSystem {
 
     this.data.set(normalized, {
       type: "directory",
-      mode: 0o755,
+      mode: DEFAULT_DIR_MODE,
       mtime: new Date(),
     });
   }
@@ -542,7 +507,7 @@ export class InMemoryFs implements IFileSystem {
 
   async readdirWithFileTypes(path: string): Promise<DirentEntry[]> {
     validatePath(path, "scandir");
-    let normalized = this.normalizePath(path);
+    let normalized = normalizePath(path);
     let entry = this.data.get(normalized);
 
     if (!entry) {
@@ -558,7 +523,7 @@ export class InMemoryFs implements IFileSystem {
         );
       }
       seen.add(normalized);
-      normalized = this.resolveSymlink(normalized, entry.target);
+      normalized = resolveSymlinkTarget(normalized, entry.target);
       entry = this.data.get(normalized);
     }
 
@@ -597,7 +562,7 @@ export class InMemoryFs implements IFileSystem {
 
   async rm(path: string, options?: RmOptions): Promise<void> {
     validatePath(path, "rm");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     const entry = this.data.get(normalized);
 
     if (!entry) {
@@ -612,8 +577,7 @@ export class InMemoryFs implements IFileSystem {
           throw new Error(`ENOTEMPTY: directory not empty, rm '${path}'`);
         }
         for (const child of children) {
-          const childPath =
-            normalized === "/" ? `/${child}` : `${normalized}/${child}`;
+          const childPath = joinPath(normalized, child);
           await this.rm(childPath, options);
         }
       }
@@ -625,8 +589,8 @@ export class InMemoryFs implements IFileSystem {
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
     validatePath(src, "cp");
     validatePath(dest, "cp");
-    const srcNorm = this.normalizePath(src);
-    const destNorm = this.normalizePath(dest);
+    const srcNorm = normalizePath(src);
+    const destNorm = normalizePath(dest);
     const srcEntry = this.data.get(srcNorm);
 
     if (!srcEntry) {
@@ -657,9 +621,8 @@ export class InMemoryFs implements IFileSystem {
       await this.mkdir(destNorm, { recursive: true });
       const children = await this.readdir(srcNorm);
       for (const child of children) {
-        const srcChild = srcNorm === "/" ? `/${child}` : `${srcNorm}/${child}`;
-        const destChild =
-          destNorm === "/" ? `/${child}` : `${destNorm}/${child}`;
+        const srcChild = joinPath(srcNorm, child);
+        const destChild = joinPath(destNorm, child);
         await this.cp(srcChild, destChild, options);
       }
     }
@@ -675,19 +638,14 @@ export class InMemoryFs implements IFileSystem {
     return Array.from(this.data.keys());
   }
 
-  // Resolve a path relative to a base
   resolvePath(base: string, path: string): string {
-    if (path.startsWith("/")) {
-      return this.normalizePath(path);
-    }
-    const combined = base === "/" ? `/${path}` : `${base}/${path}`;
-    return this.normalizePath(combined);
+    return resolvePath(base, path);
   }
 
   // Change file/directory permissions
   async chmod(path: string, mode: number): Promise<void> {
     validatePath(path, "chmod");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     const entry = this.data.get(normalized);
 
     if (!entry) {
@@ -700,7 +658,7 @@ export class InMemoryFs implements IFileSystem {
   // Create a symbolic link
   async symlink(target: string, linkPath: string): Promise<void> {
     validatePath(linkPath, "symlink");
-    const normalized = this.normalizePath(linkPath);
+    const normalized = normalizePath(linkPath);
 
     if (this.data.has(normalized)) {
       throw new Error(`EEXIST: file already exists, symlink '${linkPath}'`);
@@ -710,7 +668,7 @@ export class InMemoryFs implements IFileSystem {
     this.data.set(normalized, {
       type: "symlink",
       target,
-      mode: 0o777,
+      mode: SYMLINK_MODE,
       mtime: new Date(),
     });
   }
@@ -719,8 +677,8 @@ export class InMemoryFs implements IFileSystem {
   async link(existingPath: string, newPath: string): Promise<void> {
     validatePath(existingPath, "link");
     validatePath(newPath, "link");
-    const existingNorm = this.normalizePath(existingPath);
-    const newNorm = this.normalizePath(newPath);
+    const existingNorm = normalizePath(existingPath);
+    const newNorm = normalizePath(newPath);
 
     const entry = this.data.get(existingNorm);
     if (!entry) {
@@ -757,7 +715,7 @@ export class InMemoryFs implements IFileSystem {
   // Read the target of a symbolic link
   async readlink(path: string): Promise<string> {
     validatePath(path, "readlink");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     const entry = this.data.get(normalized);
 
     if (!entry) {
@@ -796,7 +754,7 @@ export class InMemoryFs implements IFileSystem {
    */
   async utimes(path: string, _atime: Date, mtime: Date): Promise<void> {
     validatePath(path, "utimes");
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     const resolved = this.resolvePathWithSymlinks(normalized);
     const entry = this.data.get(resolved);
 

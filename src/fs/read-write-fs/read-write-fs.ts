@@ -29,14 +29,19 @@ import type {
   RmOptions,
   WriteFileOptions,
 } from "../interface.js";
+import { resolvePath as resolveVPath } from "../path-utils.js";
 import {
   isPathWithinRoot,
   normalizePath,
   resolveCanonicalPath,
   resolveCanonicalPathNoSymlinks,
+  sanitizeFsError,
   validatePath,
   validateRootDirectory,
 } from "../real-fs-utils.js";
+
+/** Error patterns that are safe to pass through (contain virtual paths, not real ones). */
+const RW_PASSTHROUGH_ERRORS = ["EACCES", "escaping sandbox", "EFBIG"] as const;
 
 export interface ReadWriteFsOptions {
   /**
@@ -550,11 +555,7 @@ export class ReadWriteFs implements IFileSystem {
   }
 
   resolvePath(base: string, path: string): string {
-    if (path.startsWith("/")) {
-      return normalizePath(path);
-    }
-    const combined = base === "/" ? `/${path}` : `${base}/${path}`;
-    return normalizePath(combined);
+    return resolveVPath(base, path);
   }
 
   getAllPaths(): string[] {
@@ -564,33 +565,12 @@ export class ReadWriteFs implements IFileSystem {
     return paths;
   }
 
-  /**
-   * Sanitize an error to prevent leaking real OS paths in error messages.
-   * Replaces the original error with one containing only the virtual path.
-   */
   private sanitizeError(
     e: unknown,
     virtualPath: string,
     operation: string,
   ): never {
-    const err = e as NodeJS.ErrnoException;
-    // Node.js ErrnoException objects from fs.promises have a .path property
-    // containing the real OS path. Never pass these through — always sanitize.
-    // Our own errors (constructed with new Error(...)) don't have .path.
-    // Use strict === undefined check (not !err.path) so that an error with
-    // .path = "" (empty string) is still sanitized rather than passed through.
-    if (err.path === undefined) {
-      if (
-        err.message?.includes("EACCES") ||
-        err.message?.includes("escaping sandbox") ||
-        err.message?.includes("EFBIG")
-      ) {
-        // Our own errors with virtual paths — rethrow as-is
-        throw e;
-      }
-    }
-    const code = err.code || "EIO";
-    throw new Error(`${code}: ${operation} '${virtualPath}'`);
+    sanitizeFsError(e, virtualPath, operation, RW_PASSTHROUGH_ERRORS);
   }
 
   /**

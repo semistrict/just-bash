@@ -17,6 +17,11 @@ import type { Parser } from "./parser.js";
 import { ParseException } from "./types.js";
 import * as WordParser from "./word-parser.js";
 
+/** Ensure a word-parts array is non-empty (use empty-string literal as fallback). */
+function ensureNonEmpty(parts: WordPart[]): WordPart[] {
+  return parts.length > 0 ? parts : [AST.literal("")];
+}
+
 /**
  * Find the closing parenthesis for an extglob pattern starting at openIdx.
  * Handles nested extglob patterns and escaped characters.
@@ -362,9 +367,7 @@ function parseParameterOperation(
         false, // regexPattern
         true, // inParameterExpansion - so \} is treated as escaped }
       );
-      const word = AST.word(
-        wordParts.length > 0 ? wordParts : [AST.literal("")],
-      );
+      const word = AST.word(ensureNonEmpty(wordParts));
 
       if (op === "-") {
         return {
@@ -459,7 +462,7 @@ function parseParameterOperation(
       false, // regexPattern
       true, // inParameterExpansion - so \} is treated as escaped }
     );
-    const word = AST.word(wordParts.length > 0 ? wordParts : [AST.literal("")]);
+    const word = AST.word(ensureNonEmpty(wordParts));
 
     if (char === "-") {
       return {
@@ -501,9 +504,7 @@ function parseParameterOperation(
     const patternStr = value.slice(i, patternEnd);
     // Parse the pattern for variable expansions and quoting (like PatternReplacement)
     const patternParts = parseWordParts(p, patternStr, false, false, false);
-    const pattern = AST.word(
-      patternParts.length > 0 ? patternParts : [AST.literal("")],
-    );
+    const pattern = AST.word(ensureNonEmpty(patternParts));
 
     return {
       operation: { type: "PatternRemoval", pattern, side, greedy },
@@ -538,9 +539,7 @@ function parseParameterOperation(
     const patternStr = value.slice(i, patternEnd);
     // Parse the pattern for variable expansions (e.g., ${var//$pat/repl})
     const patternParts = parseWordParts(p, patternStr, false, false, false);
-    const pattern = AST.word(
-      patternParts.length > 0 ? patternParts : [AST.literal("")],
-    );
+    const pattern = AST.word(ensureNonEmpty(patternParts));
 
     let replacement: WordNode | null = null;
     let endIdx = patternEnd;
@@ -555,9 +554,7 @@ function parseParameterOperation(
       const replaceStr = value.slice(replaceStart, replaceEnd);
       // Parse the replacement for variable expansions
       const replaceParts = parseWordParts(p, replaceStr, false, false, false);
-      replacement = AST.word(
-        replaceParts.length > 0 ? replaceParts : [AST.literal("")],
-      );
+      replacement = AST.word(ensureNonEmpty(replaceParts));
       endIdx = replaceEnd;
     }
 

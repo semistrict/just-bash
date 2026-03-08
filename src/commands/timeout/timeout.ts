@@ -1,6 +1,7 @@
 import { shellJoinArgs } from "../../helpers/shell-quote.js";
 import { _setTimeout } from "../../timers.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
+import { parseDuration } from "../duration.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
 const timeoutHelp = {
@@ -22,30 +23,6 @@ DURATION is a number with optional suffix:
     "    --help                 display this help and exit",
   ],
 };
-
-/**
- * Parse timeout duration string to milliseconds
- */
-function parseDuration(arg: string): number | null {
-  const match = arg.match(/^(\d+\.?\d*)(s|m|h|d)?$/);
-  if (!match) return null;
-
-  const value = parseFloat(match[1]);
-  const suffix = match[2] || "s";
-
-  switch (suffix) {
-    case "s":
-      return value * 1000;
-    case "m":
-      return value * 60 * 1000;
-    case "h":
-      return value * 60 * 60 * 1000;
-    case "d":
-      return value * 24 * 60 * 60 * 1000;
-    default:
-      return null;
-  }
-}
 
 export const timeoutCommand: Command = {
   name: "timeout",

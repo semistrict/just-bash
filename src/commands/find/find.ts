@@ -6,6 +6,7 @@ import type {
   ExecResult,
   TraceCallback,
 } from "../../types.js";
+import { formatMode } from "../format-mode.js";
 
 // Use a larger batch size for find to maximize parallel I/O
 const FIND_BATCH_SIZE = 500;
@@ -1026,7 +1027,7 @@ function formatFindPrintf(
           break;
         case "M":
           // Symbolic permissions
-          value = formatSymbolicMode(result.mode, result.isDirectory);
+          value = formatMode(result.mode, result.isDirectory);
           i++;
           break;
         case "t": {
@@ -1067,30 +1068,7 @@ function formatFindPrintf(
   return output;
 }
 
-/**
- * Format permissions in symbolic form like -rwxr-xr-x
- */
-function formatSymbolicMode(mode: number, isDirectory: boolean): string {
-  const perms = mode & 0o777;
-  let result = isDirectory ? "d" : "-";
-
-  // Owner
-  result += perms & 0o400 ? "r" : "-";
-  result += perms & 0o200 ? "w" : "-";
-  result += perms & 0o100 ? "x" : "-";
-
-  // Group
-  result += perms & 0o040 ? "r" : "-";
-  result += perms & 0o020 ? "w" : "-";
-  result += perms & 0o010 ? "x" : "-";
-
-  // Other
-  result += perms & 0o004 ? "r" : "-";
-  result += perms & 0o002 ? "w" : "-";
-  result += perms & 0o001 ? "x" : "-";
-
-  return result;
-}
+// formatMode imported from ../format-mode.js
 
 /**
  * Format date in ctime format: "Wed Dec 25 12:34:56 2024"

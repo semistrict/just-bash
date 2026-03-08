@@ -12,8 +12,6 @@ async function tacExecute(
   args: string[],
   ctx: CommandContext,
 ): Promise<ExecResult> {
-  // For now, just handle stdin (no file support)
-  // TODO: Add file support
   if (args.length > 0 && args[0] !== "-") {
     // Try to read from file
     const filePath = ctx.fs.resolvePath(ctx.cwd, args[0]);

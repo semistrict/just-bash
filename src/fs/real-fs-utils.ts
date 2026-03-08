@@ -4,38 +4,17 @@
  *
  * Security-critical path validation logic lives here so both implementations
  * stay consistent.
+ *
+ * Pure path utilities (normalizePath, validatePath, dirname, resolvePath, etc.)
+ * live in path-utils.ts (no node:fs dependency, browser-safe) and are
+ * re-exported here for convenience.
  */
 
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
 
-/**
- * Normalize a virtual path: resolve `.` and `..`, ensure it starts with `/`,
- * strip trailing slashes.  Pure function, no I/O.
- */
-export function normalizePath(path: string): string {
-  if (!path || path === "/") return "/";
-
-  let normalized =
-    path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
-
-  if (!normalized.startsWith("/")) {
-    normalized = `/${normalized}`;
-  }
-
-  const parts = normalized.split("/").filter((p) => p && p !== ".");
-  const resolved: string[] = [];
-
-  for (const part of parts) {
-    if (part === "..") {
-      resolved.pop();
-    } else {
-      resolved.push(part);
-    }
-  }
-
-  return `/${resolved.join("/")}` || "/";
-}
+// Re-export path utilities used by callers that import from real-fs-utils.
+export { normalizePath, validatePath } from "./path-utils.js";
 
 /**
  * Check whether `resolved` is equal to, or a child of, `canonicalRoot`.
@@ -203,17 +182,6 @@ export function validateRootDirectory(root: string, fsName: string): void {
 export { sanitizeErrorMessage } from "./sanitize-error.js";
 
 /**
- * Validate that a path does not contain null bytes.
- * Null bytes in paths can be used to truncate filenames or bypass security
- * filters.
- */
-export function validatePath(path: string, operation: string): void {
-  if (path.includes("\0")) {
-    throw new Error(`ENOENT: path contains null byte, ${operation} '${path}'`);
-  }
-}
-
-/**
  * Sanitize a raw OS symlink target so it does not leak real filesystem paths
  * outside the sandbox.
  *
@@ -251,4 +219,33 @@ export function sanitizeSymlinkTarget(
 
   // Outside root - return just the basename to avoid leaking real paths
   return { withinRoot: false, safeName: nodePath.basename(rawTarget) };
+}
+
+/**
+ * Sanitize an error thrown during real-FS operations to prevent leaking
+ * real OS paths.  Node.js ErrnoException objects contain a `.path` property
+ * with the real filesystem path — this must never reach the sandbox user.
+ *
+ * Errors whose `.path` is `undefined` are our own errors (constructed with
+ * `new Error(...)`) rather than Node.js ErrnoExceptions.  If their message
+ * contains one of `passthroughPatterns`, they are rethrown as-is (they
+ * already contain safe virtual paths).  All other errors are replaced with
+ * a generic `"CODE: operation 'virtualPath'"` message.
+ */
+export function sanitizeFsError(
+  e: unknown,
+  virtualPath: string,
+  operation: string,
+  passthroughPatterns: readonly string[],
+): never {
+  const err = e as NodeJS.ErrnoException;
+  if (err.path === undefined) {
+    for (const pat of passthroughPatterns) {
+      if (err.message?.includes(pat)) {
+        throw e;
+      }
+    }
+  }
+  const code = err.code || "EIO";
+  throw new Error(`${code}: ${operation} '${virtualPath}'`);
 }

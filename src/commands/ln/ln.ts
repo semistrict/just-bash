@@ -1,6 +1,6 @@
 import { sanitizeErrorMessage } from "../../fs/sanitize-error.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
-import { hasHelpFlag, showHelp } from "../help.js";
+import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
 const lnHelp = {
   name: "ln",
@@ -54,11 +54,7 @@ export const lnCommand: Command = {
         argIdx++;
         break;
       } else {
-        return {
-          stdout: "",
-          stderr: `ln: invalid option -- '${arg.slice(1)}'\n`,
-          exitCode: 1,
-        };
+        return unknownOption("ln", arg);
       }
     }
 

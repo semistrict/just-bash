@@ -1,5 +1,6 @@
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { parseArgs } from "../../utils/args.js";
+import { formatMode } from "../format-mode.js";
 import { hasHelpFlag, showHelp } from "../help.js";
 
 const statHelp = {
@@ -52,7 +53,7 @@ export const statCommand: Command = {
           // Handle custom format
           let output = format;
           const modeOctal = stat.mode.toString(8);
-          const modeStr = formatModeString(stat.mode, stat.isDirectory);
+          const modeStr = formatMode(stat.mode, stat.isDirectory);
           output = output.replace(/%n/g, file); // file name
           output = output.replace(/%N/g, `'${file}'`); // quoted file name
           output = output.replace(/%s/g, String(stat.size)); // size
@@ -70,7 +71,7 @@ export const statCommand: Command = {
         } else {
           // Default format
           const modeOctal = stat.mode.toString(8).padStart(4, "0");
-          const modeStr = formatModeString(stat.mode, stat.isDirectory);
+          const modeStr = formatMode(stat.mode, stat.isDirectory);
           stdout += `  File: ${file}\n`;
           stdout += `  Size: ${stat.size}\t\tBlocks: ${Math.ceil(stat.size / 512)}\n`;
           stdout += `Access: (${modeOctal}/${modeStr})\n`;
@@ -86,21 +87,7 @@ export const statCommand: Command = {
   },
 };
 
-function formatModeString(mode: number, isDirectory: boolean): string {
-  const typeChar = isDirectory ? "d" : "-";
-  const perms = [
-    mode & 0o400 ? "r" : "-",
-    mode & 0o200 ? "w" : "-",
-    mode & 0o100 ? "x" : "-",
-    mode & 0o040 ? "r" : "-",
-    mode & 0o020 ? "w" : "-",
-    mode & 0o010 ? "x" : "-",
-    mode & 0o004 ? "r" : "-",
-    mode & 0o002 ? "w" : "-",
-    mode & 0o001 ? "x" : "-",
-  ];
-  return typeChar + perms.join("");
-}
+// formatMode imported from ../format-mode.js
 
 import type { CommandFuzzInfo } from "../fuzz-flags-types.js";
 

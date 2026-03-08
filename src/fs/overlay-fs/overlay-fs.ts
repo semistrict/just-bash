@@ -30,14 +30,27 @@ import type {
   WriteFileOptions,
 } from "../interface.js";
 import {
+  DEFAULT_DIR_MODE,
+  DEFAULT_FILE_MODE,
+  dirname,
+  MAX_SYMLINK_DEPTH,
+  resolveSymlinkTarget,
+  resolvePath as resolveVPath,
+  SYMLINK_MODE,
+} from "../path-utils.js";
+import {
   isPathWithinRoot,
   normalizePath,
   resolveCanonicalPath,
   resolveCanonicalPathNoSymlinks,
+  sanitizeFsError,
   sanitizeSymlinkTarget,
   validatePath,
   validateRootDirectory,
 } from "../real-fs-utils.js";
+
+/** Error patterns that are safe to pass through (contain virtual paths, not real ones). */
+const OVERLAY_PASSTHROUGH_ERRORS = ["ELOOP", "EFBIG", "EPERM"] as const;
 
 interface MemoryFileEntry {
   type: "file";
@@ -159,7 +172,7 @@ export class OverlayFs implements IFileSystem {
       if (!this.memory.has(current)) {
         this.memory.set(current, {
           type: "directory",
-          mode: 0o755,
+          mode: DEFAULT_DIR_MODE,
           mtime: new Date(),
         });
       }
@@ -168,7 +181,7 @@ export class OverlayFs implements IFileSystem {
     if (!this.memory.has("/")) {
       this.memory.set("/", {
         type: "directory",
-        mode: 0o755,
+        mode: DEFAULT_DIR_MODE,
         mtime: new Date(),
       });
     }
@@ -193,7 +206,7 @@ export class OverlayFs implements IFileSystem {
       if (!this.memory.has(current)) {
         this.memory.set(current, {
           type: "directory",
-          mode: 0o755,
+          mode: DEFAULT_DIR_MODE,
           mtime: new Date(),
         });
       }
@@ -217,7 +230,7 @@ export class OverlayFs implements IFileSystem {
     this.memory.set(normalized, {
       type: "file",
       content: buffer,
-      mode: 0o644,
+      mode: DEFAULT_FILE_MODE,
       mtime: new Date(),
     });
   }
@@ -272,13 +285,6 @@ export class OverlayFs implements IFileSystem {
     return resolvedReal;
   }
 
-  private dirname(path: string): string {
-    const normalized = normalizePath(path);
-    if (normalized === "/") return "/";
-    const lastSlash = normalized.lastIndexOf("/");
-    return lastSlash === 0 ? "/" : normalized.slice(0, lastSlash);
-  }
-
   /**
    * Resolve a real-FS path to its canonical form and validate it stays
    * within the sandbox.  Returns the canonical path for I/O, or null if
@@ -313,45 +319,23 @@ export class OverlayFs implements IFileSystem {
     return nodePath.join(canonicalParent, nodePath.basename(realPath));
   }
 
-  /**
-   * Sanitize an error to prevent leaking real OS paths in error messages.
-   * Node.js ErrnoException objects contain a `.path` property with the real
-   * filesystem path — this must never reach the sandbox user.
-   */
   private sanitizeError(
     e: unknown,
     virtualPath: string,
     operation: string,
   ): never {
-    const err = e as NodeJS.ErrnoException;
-    // Node.js ErrnoException objects from fs.promises have a .path property
-    // containing the real OS path. Never pass these through — always sanitize.
-    // Our own errors (constructed with new Error(...)) don't have .path.
-    // Use strict === undefined check (not !err.path) so that an error with
-    // .path = "" (empty string) is still sanitized rather than passed through.
-    if (err.path === undefined) {
-      if (
-        err.message?.includes("ELOOP") ||
-        err.message?.includes("EFBIG") ||
-        err.message?.includes("EPERM")
-      ) {
-        // Our own errors with virtual paths — rethrow as-is
-        throw e;
-      }
-    }
-    const code = err.code || "EIO";
-    throw new Error(`${code}: ${operation} '${virtualPath}'`);
+    sanitizeFsError(e, virtualPath, operation, OVERLAY_PASSTHROUGH_ERRORS);
   }
 
   private ensureParentDirs(path: string): void {
-    const dir = this.dirname(path);
+    const dir = dirname(path);
     if (dir === "/") return;
 
     if (!this.memory.has(dir)) {
       this.ensureParentDirs(dir);
       this.memory.set(dir, {
         type: "directory",
-        mode: 0o755,
+        mode: DEFAULT_DIR_MODE,
         mtime: new Date(),
       });
     }
@@ -507,7 +491,7 @@ export class OverlayFs implements IFileSystem {
     this.memory.set(normalized, {
       type: "file",
       content: buffer,
-      mode: 0o644,
+      mode: DEFAULT_FILE_MODE,
       mtime: new Date(),
     });
     this.deleted.delete(normalized);
@@ -540,7 +524,7 @@ export class OverlayFs implements IFileSystem {
     this.memory.set(normalized, {
       type: "file",
       content: combined,
-      mode: 0o644,
+      mode: DEFAULT_FILE_MODE,
       mtime: new Date(),
     });
     this.deleted.delete(normalized);
@@ -695,11 +679,7 @@ export class OverlayFs implements IFileSystem {
   }
 
   private resolveSymlink(symlinkPath: string, target: string): string {
-    if (target.startsWith("/")) {
-      return normalizePath(target);
-    }
-    const dir = this.dirname(symlinkPath);
-    return normalizePath(dir === "/" ? `/${target}` : `${dir}/${target}`);
+    return resolveSymlinkTarget(symlinkPath, target);
   }
 
   /**
@@ -745,7 +725,7 @@ export class OverlayFs implements IFileSystem {
     }
 
     // Check parent exists
-    const parent = this.dirname(normalized);
+    const parent = dirname(normalized);
     if (parent !== "/") {
       const parentExists = await this.existsInOverlay(parent);
       if (!parentExists) {
@@ -759,7 +739,7 @@ export class OverlayFs implements IFileSystem {
 
     this.memory.set(normalized, {
       type: "directory",
-      mode: 0o755,
+      mode: DEFAULT_DIR_MODE,
       mtime: new Date(),
     });
     this.deleted.delete(normalized);
@@ -1045,12 +1025,8 @@ export class OverlayFs implements IFileSystem {
     await this.rm(src, { recursive: true });
   }
 
-  resolvePath(base: string, path: string): string {
-    if (path.startsWith("/")) {
-      return normalizePath(path);
-    }
-    const combined = base === "/" ? `/${path}` : `${base}/${path}`;
-    return normalizePath(combined);
+  resolvePath(base: string, rel: string): string {
+    return resolveVPath(base, rel);
   }
 
   getAllPaths(): string[] {
@@ -1150,7 +1126,7 @@ export class OverlayFs implements IFileSystem {
     this.memory.set(normalized, {
       type: "symlink",
       target,
-      mode: 0o777,
+      mode: SYMLINK_MODE,
       mtime: new Date(),
     });
     this.deleted.delete(normalized);
@@ -1289,7 +1265,7 @@ export class OverlayFs implements IFileSystem {
         // Check memory layer first
         let entry = this.memory.get(resolved);
         let loopCount = 0;
-        const maxLoops = 40;
+        const maxLoops = MAX_SYMLINK_DEPTH;
 
         while (entry && entry.type === "symlink" && loopCount < maxLoops) {
           seen.add(resolved);

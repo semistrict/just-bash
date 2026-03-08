@@ -1,5 +1,5 @@
 import type { Command, CommandContext, ExecResult } from "../../types.js";
-import { hasHelpFlag, showHelp } from "../help.js";
+import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
 const chmodHelp = {
   name: "chmod",
@@ -52,11 +52,7 @@ export const chmodCommand: Command = {
           argIdx++;
           continue;
         }
-        return {
-          stdout: "",
-          stderr: `chmod: invalid option -- '${arg.slice(1)}'\n`,
-          exitCode: 1,
-        };
+        return unknownOption("chmod", arg);
       }
     }
 

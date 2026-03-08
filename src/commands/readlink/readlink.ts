@@ -1,5 +1,5 @@
 import type { Command, CommandContext, ExecResult } from "../../types.js";
-import { hasHelpFlag, showHelp } from "../help.js";
+import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
 const readlinkHelp = {
   name: "readlink",
@@ -32,11 +32,7 @@ export const readlinkCommand: Command = {
         argIdx++;
         break;
       } else {
-        return {
-          stdout: "",
-          stderr: `readlink: invalid option -- '${arg.slice(1)}'\n`,
-          exitCode: 1,
-        };
+        return unknownOption("readlink", arg);
       }
     }
 

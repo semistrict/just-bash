@@ -10,6 +10,13 @@ import type {
   RmOptions,
   WriteFileOptions,
 } from "../interface.js";
+import {
+  DEFAULT_DIR_MODE,
+  joinPath,
+  normalizePath,
+  resolvePath,
+  validatePath,
+} from "../path-utils.js";
 
 /**
  * Configuration for a mount point
@@ -79,7 +86,7 @@ export class MountableFs implements IFileSystem {
     // Validate original path first (before normalization)
     this.validateMountPath(mountPoint);
 
-    const normalized = this.normalizePath(mountPoint);
+    const normalized = normalizePath(mountPoint);
 
     // Validate mount point constraints
     this.validateMount(normalized);
@@ -97,7 +104,7 @@ export class MountableFs implements IFileSystem {
    * @throws Error if no filesystem is mounted at this path
    */
   unmount(mountPoint: string): void {
-    const normalized = this.normalizePath(mountPoint);
+    const normalized = normalizePath(mountPoint);
 
     if (!this.mounts.has(normalized)) {
       throw new Error(`No filesystem mounted at '${mountPoint}'`);
@@ -120,7 +127,7 @@ export class MountableFs implements IFileSystem {
    * Check if a path is exactly a mount point.
    */
   isMountPoint(path: string): boolean {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     return this.mounts.has(normalized);
   }
 
@@ -172,42 +179,12 @@ export class MountableFs implements IFileSystem {
   }
 
   /**
-   * Normalize a path to a consistent format.
-   */
-  private normalizePath(path: string): string {
-    // Handle empty or just slash
-    if (!path || path === "/") return "/";
-
-    // Remove trailing slash
-    let normalized =
-      path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
-
-    // Ensure starts with /
-    if (!normalized.startsWith("/")) {
-      normalized = `/${normalized}`;
-    }
-
-    // Resolve . and ..
-    const parts = normalized.split("/").filter((p) => p && p !== ".");
-    const resolved: string[] = [];
-
-    for (const part of parts) {
-      if (part === "..") {
-        resolved.pop();
-      } else {
-        resolved.push(part);
-      }
-    }
-
-    return `/${resolved.join("/")}`;
-  }
-
-  /**
    * Route a path to the appropriate filesystem.
    * Returns the filesystem and the relative path within that filesystem.
    */
   private routePath(path: string): { fs: IFileSystem; relativePath: string } {
-    const normalized = this.normalizePath(path);
+    validatePath(path, "access");
+    const normalized = normalizePath(path);
 
     // Check for exact or prefix mount match
     // We need to find the longest matching mount point
@@ -247,7 +224,7 @@ export class MountableFs implements IFileSystem {
    * Get mount points that are immediate children of a directory.
    */
   private getChildMountPoints(dirPath: string): string[] {
-    const normalized = this.normalizePath(dirPath);
+    const normalized = normalizePath(dirPath);
     const prefix = normalized === "/" ? "/" : `${normalized}/`;
     const children: string[] = [];
 
@@ -298,7 +275,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async exists(path: string): Promise<boolean> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
     if (this.mounts.has(normalized)) {
@@ -317,7 +294,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async stat(path: string): Promise<FsStat> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
     const mountEntry = this.mounts.get(normalized);
@@ -331,7 +308,7 @@ export class MountableFs implements IFileSystem {
           isFile: false,
           isDirectory: true,
           isSymbolicLink: false,
-          mode: 0o755,
+          mode: DEFAULT_DIR_MODE,
           size: 0,
           mtime: new Date(),
         };
@@ -351,7 +328,7 @@ export class MountableFs implements IFileSystem {
           isFile: false,
           isDirectory: true,
           isSymbolicLink: false,
-          mode: 0o755,
+          mode: DEFAULT_DIR_MODE,
           size: 0,
           mtime: new Date(),
         };
@@ -364,7 +341,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async lstat(path: string): Promise<FsStat> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
     const mountEntry = this.mounts.get(normalized);
@@ -378,7 +355,7 @@ export class MountableFs implements IFileSystem {
           isFile: false,
           isDirectory: true,
           isSymbolicLink: false,
-          mode: 0o755,
+          mode: DEFAULT_DIR_MODE,
           size: 0,
           mtime: new Date(),
         };
@@ -395,7 +372,7 @@ export class MountableFs implements IFileSystem {
           isFile: false,
           isDirectory: true,
           isSymbolicLink: false,
-          mode: 0o755,
+          mode: DEFAULT_DIR_MODE,
           size: 0,
           mtime: new Date(),
         };
@@ -408,7 +385,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Cannot create directory at mount point
     if (this.mounts.has(normalized)) {
@@ -430,7 +407,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
     const entries = new Set<string>();
     let readdirError: Error | null = null;
 
@@ -468,7 +445,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Cannot remove mount points
     if (this.mounts.has(normalized)) {
@@ -503,7 +480,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async mv(src: string, dest: string): Promise<void> {
-    const normalized = this.normalizePath(src);
+    const normalized = normalizePath(src);
 
     // Cannot move mount points
     if (this.mounts.has(normalized)) {
@@ -524,11 +501,7 @@ export class MountableFs implements IFileSystem {
   }
 
   resolvePath(base: string, path: string): string {
-    if (path.startsWith("/")) {
-      return this.normalizePath(path);
-    }
-    const combined = base === "/" ? `/${path}` : `${base}/${path}`;
-    return this.normalizePath(combined);
+    return resolvePath(base, path);
   }
 
   getAllPaths(): string[] {
@@ -565,7 +538,7 @@ export class MountableFs implements IFileSystem {
   }
 
   async chmod(path: string, mode: number): Promise<void> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Cannot chmod mount points directly
     const mountEntry = this.mounts.get(normalized);
@@ -609,7 +582,7 @@ export class MountableFs implements IFileSystem {
    * This is equivalent to POSIX realpath().
    */
   async realpath(path: string): Promise<string> {
-    const normalized = this.normalizePath(path);
+    const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
     const mountEntry = this.mounts.get(normalized);
@@ -660,8 +633,8 @@ export class MountableFs implements IFileSystem {
       await this.mkdir(dest, { recursive: true });
       const children = await this.readdir(src);
       for (const child of children) {
-        const srcChild = src === "/" ? `/${child}` : `${src}/${child}`;
-        const destChild = dest === "/" ? `/${child}` : `${dest}/${child}`;
+        const srcChild = joinPath(src, child);
+        const destChild = joinPath(dest, child);
         await this.crossMountCopy(srcChild, destChild, options);
       }
     } else if (srcStat.isSymbolicLink) {

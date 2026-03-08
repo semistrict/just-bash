@@ -7,6 +7,7 @@
 
 import { createUserRegex } from "../../regex/index.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
+import { formatMode } from "../format-mode.js";
 import { hasHelpFlag, showHelp } from "../help.js";
 import {
   createArchive,
@@ -174,24 +175,7 @@ function sanitizeExtractionPath(
   return { safePath: withoutLeadingSlash };
 }
 
-/**
- * Format file mode for verbose output (like ls -l)
- */
-function formatMode(mode: number, isDir: boolean): string {
-  const chars = isDir ? "d" : "-";
-  const perms = [
-    mode & 0o400 ? "r" : "-",
-    mode & 0o200 ? "w" : "-",
-    mode & 0o100 ? "x" : "-",
-    mode & 0o040 ? "r" : "-",
-    mode & 0o020 ? "w" : "-",
-    mode & 0o010 ? "x" : "-",
-    mode & 0o004 ? "r" : "-",
-    mode & 0o002 ? "w" : "-",
-    mode & 0o001 ? "x" : "-",
-  ].join("");
-  return chars + perms;
-}
+// formatMode imported from ../format-mode.js
 
 /**
  * Format date for verbose output

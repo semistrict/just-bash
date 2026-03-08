@@ -27,6 +27,8 @@ export function parseOptions(args: string[]): CurlOptions | ExecResult {
     verbose: false,
   };
 
+  let impliesPost = false;
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
 
@@ -56,68 +58,48 @@ export function parseOptions(args: string[]): CurlOptions | ExecResult {
       }
     } else if (arg === "-d" || arg === "--data" || arg === "--data-raw") {
       options.data = args[++i] ?? "";
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg.startsWith("-d")) {
       options.data = arg.slice(2);
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg.startsWith("--data=")) {
       options.data = arg.slice(7);
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg.startsWith("--data-raw=")) {
       options.data = arg.slice(11);
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg === "--data-binary") {
       options.data = args[++i] ?? "";
       options.dataBinary = true;
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg.startsWith("--data-binary=")) {
       options.data = arg.slice(14);
       options.dataBinary = true;
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg === "--data-urlencode") {
       const value = args[++i] ?? "";
       options.data =
         (options.data ? `${options.data}&` : "") + encodeFormData(value);
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg.startsWith("--data-urlencode=")) {
       const value = arg.slice(17);
       options.data =
         (options.data ? `${options.data}&` : "") + encodeFormData(value);
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg === "-F" || arg === "--form") {
       const formData = args[++i] ?? "";
       const field = parseFormField(formData);
       if (field) {
         options.formFields.push(field);
       }
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg.startsWith("--form=")) {
       const formData = arg.slice(7);
       const field = parseFormField(formData);
       if (field) {
         options.formFields.push(field);
       }
-      if (options.method === "GET") {
-        options.method = "POST";
-      }
+      impliesPost = true;
     } else if (arg === "-u" || arg === "--user") {
       options.user = args[++i];
     } else if (arg.startsWith("-u")) {
@@ -249,6 +231,11 @@ export function parseOptions(args: string[]): CurlOptions | ExecResult {
     } else if (!arg.startsWith("-")) {
       options.url = arg;
     }
+  }
+
+  // Data/form options imply POST when no explicit method was set
+  if (impliesPost && options.method === "GET") {
+    options.method = "POST";
   }
 
   return options;
