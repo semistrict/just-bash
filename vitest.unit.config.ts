@@ -16,8 +16,17 @@ export default defineConfig({
       "**/python-scripting*",
     ],
     setupFiles: [resolve(__dirname, "src/vitest-setup.ts")],
-    // vi.mock("node:worker_threads") is unreliable in threads pool
-    // because Vitest itself uses worker_threads for its thread pool.
-    poolMatchGlobs: [["forks", "**/sqlite3.worker-protocol-abuse.test.ts"]],
+    // Tests that patch globalThis (defense-in-depth) or spawn workers need
+    // process-level isolation so they don't leak state into thread neighbours.
+    poolMatchGlobs: [
+      ["forks", "**/security/attacks/**"],
+      ["forks", "**/security/defense-in-depth-box*.test.ts"],
+      ["forks", "**/security/defense-in-depth-hardening.test.ts"],
+      ["forks", "**/security/sandbox/**"],
+      ["forks", "**/sqlite3.worker-protocol-abuse.test.ts"],
+      ["forks", "**/python3.worker-protocol-abuse.test.ts"],
+      ["forks", "**/python3.queue-desync.runtime.test.ts"],
+      ["forks", "**/wasm-callback.test.ts"],
+    ],
   },
 });
