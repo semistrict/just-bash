@@ -1,5 +1,5 @@
 import { shellJoinArgs } from "../../helpers/shell-quote.js";
-import { _setTimeout } from "../../timers.js";
+import { _clearTimeout, _setTimeout } from "../../timers.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { parseDuration } from "../duration.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
@@ -32,7 +32,6 @@ export const timeoutCommand: Command = {
       return showHelp(timeoutHelp);
     }
 
-    let preserveStatus = false;
     let commandStart = 0;
 
     // Parse timeout options
@@ -40,7 +39,7 @@ export const timeoutCommand: Command = {
       const arg = args[i];
 
       if (arg === "--preserve-status") {
-        preserveStatus = true;
+        // Accepted but not implemented (always exits 124 on timeout)
         commandStart = i + 1;
       } else if (arg === "--foreground") {
         // Ignored in virtual env
@@ -124,33 +123,39 @@ export const timeoutCommand: Command = {
     // to stop at the next statement boundary — no post-timeout side effects.
     const controller = new AbortController();
 
-    const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
-      _setTimeout(() => {
-        controller.abort();
-        resolve({ timedOut: true });
-      }, durationMs);
-    });
+    let timerId: ReturnType<typeof _setTimeout> | undefined;
+    try {
+      const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
+        timerId = _setTimeout(() => {
+          controller.abort();
+          resolve({ timedOut: true });
+        }, durationMs);
+      });
 
-    const execPromise = ctx
-      .exec(commandStr, {
-        cwd: ctx.cwd,
-        signal: controller.signal,
-        stdin: ctx.stdin,
-      })
-      .then((result) => ({ timedOut: false as const, result }));
+      const execPromise = ctx
+        .exec(commandStr, {
+          cwd: ctx.cwd,
+          signal: controller.signal,
+          stdin: ctx.stdin,
+        })
+        .then((result) => ({ timedOut: false as const, result }));
 
-    const outcome = await Promise.race([timeoutPromise, execPromise]);
+      const outcome = await Promise.race([timeoutPromise, execPromise]);
 
-    if (outcome.timedOut) {
-      // Command timed out — the abort signal ensures it stops
-      return {
-        stdout: "",
-        stderr: "",
-        exitCode: preserveStatus ? 124 : 124,
-      };
+      if (outcome.timedOut) {
+        return {
+          stdout: "",
+          stderr: "",
+          exitCode: 124,
+        };
+      }
+
+      return outcome.result;
+    } finally {
+      if (timerId !== undefined) {
+        _clearTimeout(timerId);
+      }
     }
-
-    return outcome.result;
   },
 };
 

@@ -250,9 +250,21 @@ function processNextExecution(queueState: QueueState): void {
   // CPython Emscripten uses EXIT_RUNTIME, so the module can only run once.
   // The worker caches the stdlib zip at module scope (read from disk once
   // per worker lifetime, not per execution).
-  const worker = DefenseInDepthBox.runTrusted(
-    () => new Worker(workerPath, { workerData: next.input }),
-  );
+  let worker: Worker;
+  try {
+    worker = DefenseInDepthBox.runTrusted(
+      () => new Worker(workerPath, { workerData: next.input }),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    next.resolve({
+      success: false,
+      error: sanitizeErrorMessage(message),
+    });
+    queueState.isExecuting = false;
+    processNextExecution(queueState);
+    return;
+  }
 
   if (next.workerRef) next.workerRef.current = worker;
 

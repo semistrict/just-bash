@@ -163,12 +163,20 @@ export class FuzzRunner {
       hitLimit: false,
     };
 
+    // Use AbortController to cancel exec on timeout
+    const controller = new AbortController();
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+
     try {
-      // Execute with timeout
-      const execPromise = bash.exec(script);
-      const timeoutPromise = new Promise<"timeout">((resolve) =>
-        setTimeout(() => resolve("timeout"), this.config.timeoutMs),
-      );
+      const execPromise = bash.exec(script, {
+        signal: controller.signal,
+      });
+      const timeoutPromise = new Promise<"timeout">((resolve) => {
+        timerId = setTimeout(() => {
+          controller.abort();
+          resolve("timeout");
+        }, this.config.timeoutMs);
+      });
 
       const raceResult = await Promise.race([execPromise, timeoutPromise]);
 
@@ -211,6 +219,10 @@ export class FuzzRunner {
         errorMsg.includes("limit") ||
         errorMsg.includes("maximum") ||
         errorMsg.includes("exceeded");
+    } finally {
+      if (timerId !== undefined) {
+        clearTimeout(timerId);
+      }
     }
 
     // Capture coverage snapshot if enabled

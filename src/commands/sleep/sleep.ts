@@ -64,17 +64,18 @@ export const sleepCommand: Command = {
     if (ctx.sleep) {
       await ctx.sleep(totalMs);
     } else if (ctx.signal) {
-      // Abort-aware sleep: resolve early if the signal fires
+      // Abort-aware sleep: resolve early if the signal fires.
+      // Named handler so we can remove it when the timer resolves normally.
       await new Promise<void>((resolve) => {
-        const timer = _setTimeout(resolve, totalMs);
-        ctx.signal?.addEventListener(
-          "abort",
-          () => {
-            _clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
+        const onAbort = () => {
+          _clearTimeout(timer);
+          resolve();
+        };
+        const timer = _setTimeout(() => {
+          ctx.signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, totalMs);
+        ctx.signal?.addEventListener("abort", onAbort, { once: true });
       });
     } else {
       await new Promise((resolve) => _setTimeout(resolve, totalMs));

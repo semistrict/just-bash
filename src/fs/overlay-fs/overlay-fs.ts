@@ -982,9 +982,31 @@ export class OverlayFs implements IFileSystem {
       // If stat fails, we'll just mark it as deleted
     }
 
-    // Mark as deleted and remove from memory
-    this.deleted.add(normalized);
+    // Remove from memory layer
     this.memory.delete(normalized);
+
+    // Only add a tombstone when hiding a real-FS path.
+    // For memory-only files there's nothing to hide, so skip the tombstone
+    // to prevent unbounded growth of the deleted set.
+    if (this.existsOnRealFs(normalized)) {
+      this.deleted.add(normalized);
+    }
+  }
+
+  /**
+   * Check (synchronously) whether a path exists on the real filesystem.
+   * Used to decide whether a tombstone is needed after deletion.
+   */
+  private existsOnRealFs(virtualPath: string): boolean {
+    const realPath = this.toRealPath(virtualPath);
+    const canonical = this.resolveRealPathParent_(realPath);
+    if (!canonical) return false;
+    try {
+      fs.lstatSync(canonical);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {

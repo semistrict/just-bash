@@ -6,7 +6,9 @@
 
 import { createUserRegex, type RegexLike } from "../regex/index.js";
 
-// Cache compiled regexes for glob patterns (key: pattern + flags)
+// Cache compiled regexes for glob patterns (key: pattern + flags).
+// Bounded to prevent unbounded memory growth from diverse patterns.
+const GLOB_CACHE_MAX = 2048;
 const globRegexCache = new Map<string, RegexLike>();
 
 export interface MatchGlobOptions {
@@ -57,6 +59,11 @@ export function matchGlob(
 
   if (!re) {
     re = globToRegex(cleanPattern, opts.ignoreCase);
+    if (globRegexCache.size >= GLOB_CACHE_MAX) {
+      // Evict oldest entry (first key in insertion order)
+      const oldest = globRegexCache.keys().next().value;
+      if (oldest !== undefined) globRegexCache.delete(oldest);
+    }
     globRegexCache.set(cacheKey, re);
   }
 

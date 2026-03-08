@@ -22,6 +22,13 @@ export interface SecurityViolationLoggerOptions {
   maxViolationsPerType?: number;
 
   /**
+   * Maximum total violations to retain across all types.
+   * Oldest violations are dropped when this limit is reached.
+   * Default: 1000
+   */
+  maxViolationsTotal?: number;
+
+  /**
    * Whether to include stack traces in logged violations.
    * Default: true
    */
@@ -64,6 +71,7 @@ export class SecurityViolationLogger {
   constructor(options: SecurityViolationLoggerOptions = {}) {
     this.options = {
       maxViolationsPerType: options.maxViolationsPerType ?? 100,
+      maxViolationsTotal: options.maxViolationsTotal ?? 1000,
       includeStackTraces: options.includeStackTraces ?? true,
       onViolation: options.onViolation ?? (() => {}),
       logToConsole: options.logToConsole ?? false,
@@ -80,8 +88,11 @@ export class SecurityViolationLogger {
       ? violation
       : { ...violation, stack: undefined };
 
-    // Store in main list (most recent first)
+    // Store in main list (most recent first), capping total size
     this.violations.unshift(processedViolation);
+    if (this.violations.length > this.options.maxViolationsTotal) {
+      this.violations.length = this.options.maxViolationsTotal;
+    }
 
     // Store by type
     let typeList = this.violationsByType.get(violation.type);
