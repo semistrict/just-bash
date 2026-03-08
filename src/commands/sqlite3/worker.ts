@@ -31,9 +31,30 @@ let cachedSQL: SqlJsStatic | null = null;
 // Defense instance (activated after sql.js init)
 let defense: WorkerDefenseInDepth | null = null;
 
-function postWorkerMessage(message: unknown): void {
+function wrapWorkerMessage(
+  protocolToken: string,
+  message: unknown,
+): Record<string, unknown> {
+  const wrapped = Object.create(null) as Record<string, unknown>;
+
+  if (!message || typeof message !== "object") {
+    wrapped.success = false;
+    wrapped.error = "Worker attempted to post non-object message";
+    wrapped.protocolToken = protocolToken;
+    return wrapped;
+  }
+
+  for (const [key, value] of Object.entries(message as Record<string, unknown>))
+    wrapped[key] = value;
+
+  // Set token AFTER copying message entries to prevent payload from overwriting it
+  wrapped.protocolToken = protocolToken;
+  return wrapped;
+}
+
+function postWorkerMessage(protocolToken: string, message: unknown): void {
   try {
-    parentPort?.postMessage(message);
+    parentPort?.postMessage(wrapWorkerMessage(protocolToken, message));
   } catch (error) {
     // Best effort: avoid crashing worker when parent port is unavailable.
     console.debug(
@@ -47,7 +68,9 @@ function postWorkerMessage(message: unknown): void {
  * Initialize sql.js and activate defense-in-depth.
  * Called once per worker lifetime.
  */
-async function initializeWithDefense(): Promise<SqlJsStatic> {
+async function initializeWithDefense(
+  protocolToken: string,
+): Promise<SqlJsStatic> {
   if (cachedSQL) {
     return cachedSQL;
   }
@@ -60,7 +83,10 @@ async function initializeWithDefense(): Promise<SqlJsStatic> {
     "sqlite3-worker",
     "onViolation",
     (v: unknown) => {
-      postWorkerMessage({ type: "security-violation", violation: v });
+      postWorkerMessage(protocolToken, {
+        type: "security-violation",
+        violation: v,
+      });
     },
   );
 
@@ -70,6 +96,7 @@ async function initializeWithDefense(): Promise<SqlJsStatic> {
 }
 
 export interface WorkerInput {
+  protocolToken: string;
   dbBuffer: Uint8Array | null; // null for :memory:
   sql: string;
   options: {
@@ -158,7 +185,7 @@ async function executeQuery(data: WorkerInput): Promise<WorkerOutput> {
   let db: Database;
 
   try {
-    const SQL = await initializeWithDefense();
+    const SQL = await initializeWithDefense(data.protocolToken);
 
     if (data.dbBuffer) {
       db = new SQL.Database(data.dbBuffer);
@@ -234,12 +261,13 @@ async function executeQuery(data: WorkerInput): Promise<WorkerOutput> {
 
 // Execute when run as worker
 if (parentPort && workerData) {
-  executeQuery(workerData as WorkerInput)
+  const input = workerData as WorkerInput;
+  executeQuery(input)
     .then((result) => {
-      postWorkerMessage(result);
+      postWorkerMessage(input.protocolToken, result);
     })
     .catch((error) => {
-      postWorkerMessage({
+      postWorkerMessage(input.protocolToken, {
         success: false,
         error: sanitizeUnknownError(error),
         defenseStats: defense?.getStats(),
