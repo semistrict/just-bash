@@ -903,6 +903,48 @@ describe("isPrivateIp", () => {
     expect(isPrivateIp("0.0.0.0")).toBe(true);
   });
 
+  it("rejects CGNAT / Shared Address Space (RFC 6598)", () => {
+    expect(isPrivateIp("100.64.0.1")).toBe(true);
+    expect(isPrivateIp("100.127.255.255")).toBe(true);
+    expect(isPrivateIp("100.100.100.100")).toBe(true);
+    // Just outside the range
+    expect(isPrivateIp("100.63.255.255")).toBe(false);
+    expect(isPrivateIp("100.128.0.0")).toBe(false);
+  });
+
+  it("rejects Benchmarking range (RFC 2544)", () => {
+    expect(isPrivateIp("198.18.0.1")).toBe(true);
+    expect(isPrivateIp("198.19.255.255")).toBe(true);
+    // Just outside the range
+    expect(isPrivateIp("198.17.255.255")).toBe(false);
+    expect(isPrivateIp("198.20.0.0")).toBe(false);
+  });
+
+  it("rejects IETF Protocol Assignments (RFC 6890)", () => {
+    expect(isPrivateIp("192.0.0.1")).toBe(true);
+    expect(isPrivateIp("192.0.0.255")).toBe(true);
+  });
+
+  it("rejects TEST-NET ranges (RFC 5737)", () => {
+    // TEST-NET-1
+    expect(isPrivateIp("192.0.2.0")).toBe(true);
+    expect(isPrivateIp("192.0.2.255")).toBe(true);
+    // TEST-NET-2
+    expect(isPrivateIp("198.51.100.0")).toBe(true);
+    expect(isPrivateIp("198.51.100.255")).toBe(true);
+    // TEST-NET-3
+    expect(isPrivateIp("203.0.113.0")).toBe(true);
+    expect(isPrivateIp("203.0.113.255")).toBe(true);
+  });
+
+  it("rejects Reserved/broadcast range (RFC 1112)", () => {
+    expect(isPrivateIp("240.0.0.0")).toBe(true);
+    expect(isPrivateIp("255.255.255.255")).toBe(true);
+    expect(isPrivateIp("250.1.2.3")).toBe(true);
+    // Just below the range
+    expect(isPrivateIp("239.255.255.255")).toBe(false);
+  });
+
   it("allows public IPs", () => {
     expect(isPrivateIp("8.8.8.8")).toBe(false);
     expect(isPrivateIp("93.184.216.34")).toBe(false);
@@ -932,8 +974,40 @@ describe("isPrivateIp", () => {
     expect(isPrivateIp("::ffff:7f00:1")).toBe(true);
   });
 
+  it("rejects IPv6 documentation prefix (RFC 3849)", () => {
+    expect(isPrivateIp("2001:db8::1")).toBe(true);
+    expect(isPrivateIp("2001:db8:1234:5678::1")).toBe(true);
+    // Just outside the range
+    expect(isPrivateIp("2001:db9::1")).toBe(false);
+  });
+
+  it("rejects NAT64 well-known prefix (RFC 6052) with private embedded IPv4", () => {
+    // 64:ff9b::127.0.0.1 — embedded loopback
+    expect(isPrivateIp("64:ff9b::7f00:1")).toBe(true);
+    // 64:ff9b::10.0.0.1 — embedded private
+    expect(isPrivateIp("64:ff9b::a00:1")).toBe(true);
+    // 64:ff9b::8.8.8.8 — embedded public (allowed)
+    expect(isPrivateIp("64:ff9b::808:808")).toBe(false);
+  });
+
+  it("rejects NAT64 local-use prefix (RFC 8215)", () => {
+    expect(isPrivateIp("64:ff9b:1::1")).toBe(true);
+    expect(isPrivateIp("64:ff9b:1:abcd::1")).toBe(true);
+  });
+
+  it("rejects 6to4 (RFC 3056) with private embedded IPv4", () => {
+    // 2002:7f00:0001:: — embedded 127.0.0.1
+    expect(isPrivateIp("2002:7f00:1::")).toBe(true);
+    // 2002:0a00:0001:: — embedded 10.0.0.1
+    expect(isPrivateIp("2002:a00:1::")).toBe(true);
+    // 2002:c0a8:0101:: — embedded 192.168.1.1
+    expect(isPrivateIp("2002:c0a8:101::")).toBe(true);
+    // 2002:0808:0808:: — embedded 8.8.8.8 (allowed)
+    expect(isPrivateIp("2002:808:808::")).toBe(false);
+  });
+
   it("allows public IPv6", () => {
-    expect(isPrivateIp("2001:db8::1")).toBe(false);
+    expect(isPrivateIp("2001:470::1")).toBe(false);
     // fec0 is outside fe80::/10 range
     expect(isPrivateIp("fec0::1")).toBe(false);
   });

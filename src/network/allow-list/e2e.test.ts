@@ -11,6 +11,7 @@ import {
   createBashEnvAdapter,
   createMockFetch,
   createSandboxAdapter,
+  expectBlockedPrivate,
   MOCK_EVIL_BODY,
   MOCK_FILE_BODY,
   MOCK_POSTS_BODY,
@@ -367,6 +368,28 @@ function runAllowListTests(name: string, createAdapter: AdapterFactory) {
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toBe(MOCK_EVIL_BODY);
         expect(result.stderr).toBe("");
+      });
+
+      it("still blocks private IPs when denyPrivateRanges is enabled", async () => {
+        const env = await createAdapter({
+          network: {
+            dangerouslyAllowFullInternetAccess: true,
+            denyPrivateRanges: true,
+          },
+        });
+
+        // Public URL should still be allowed
+        const r1 = await env.exec("curl https://api.example.com/data");
+        expect(r1.exitCode).toBe(0);
+        expect(r1.stdout).toBe(MOCK_SUCCESS_BODY);
+        expect(r1.stderr).toBe("");
+
+        // Private IPs should be blocked even with full access
+        await expectBlockedPrivate(env, "https://127.0.0.1/data");
+        await expectBlockedPrivate(env, "https://10.0.0.1/data");
+        await expectBlockedPrivate(env, "https://192.168.1.1/data");
+        await expectBlockedPrivate(env, "https://[::1]/data");
+        await expectBlockedPrivate(env, "https://localhost/data");
       });
     });
 

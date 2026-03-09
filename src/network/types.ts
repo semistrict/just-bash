@@ -72,6 +72,10 @@ export interface NetworkConfig {
    * Reject URLs with private/loopback IP addresses as hostnames.
    * This is a URL/hostname-level check only (no DNS resolution).
    * Useful for mitigating SSRF attacks. Default: false (opt-in).
+   *
+   * When enabled, the private IP check is enforced even when
+   * `dangerouslyAllowFullInternetAccess` is true, ensuring that
+   * internal/loopback addresses are never reachable.
    */
   denyPrivateRanges?: boolean;
 }
@@ -91,8 +95,9 @@ export interface FetchResult {
  * Error thrown when a URL is not allowed
  */
 export class NetworkAccessDeniedError extends Error {
-  constructor(url: string) {
-    super(`Network access denied: URL not in allow-list: ${url}`);
+  constructor(url: string, reason?: string) {
+    const detail = reason ?? "URL not in allow-list";
+    super(`Network access denied: ${detail}: ${url}`);
     this.name = "NetworkAccessDeniedError";
   }
 }

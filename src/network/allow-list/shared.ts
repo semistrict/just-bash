@@ -176,6 +176,23 @@ export async function expectBlocked(
 }
 
 /**
+ * Utility for testing that a URL is blocked due to private IP
+ */
+export async function expectBlockedPrivate(
+  env: EnvAdapter,
+  url: string,
+  expectedUrl?: string,
+): Promise<void> {
+  const result = await env.exec(`curl "${url}"`);
+  expect(result.exitCode).toBe(7);
+  expect(result.stdout).toBe("");
+  const blockedUrl = expectedUrl ?? url;
+  expect(result.stderr).toBe(
+    `curl: (7) Network access denied: private/loopback IP address blocked: ${blockedUrl}\n`,
+  );
+}
+
+/**
  * Utility for testing that a URL succeeds with expected mock response
  */
 export async function expectAllowed(
