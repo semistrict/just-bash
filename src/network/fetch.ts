@@ -81,21 +81,26 @@ export function createSecureFetch(config: NetworkConfig): SecureFetch {
    * @throws NetworkAccessDeniedError if the URL is not allowed
    */
   function checkAllowed(url: string): void {
-    if (config.dangerouslyAllowFullInternetAccess) {
-      return;
-    }
-
-    // Check private IP ranges
+    // Private IP check runs BEFORE the full-access bypass so that
+    // dangerouslyAllowFullInternetAccess never allows reaching
+    // internal/loopback addresses.
     if (denyPrivateRanges) {
       try {
         const parsed = new URL(url);
         if (isPrivateIp(parsed.hostname)) {
-          throw new NetworkAccessDeniedError(url);
+          throw new NetworkAccessDeniedError(
+            url,
+            "private/loopback IP address blocked",
+          );
         }
       } catch (e) {
         if (e instanceof NetworkAccessDeniedError) throw e;
         // Invalid URL will be caught by isUrlAllowed below
       }
+    }
+
+    if (config.dangerouslyAllowFullInternetAccess) {
+      return;
     }
 
     if (!isUrlAllowed(url, config.allowedUrlPrefixes ?? [])) {

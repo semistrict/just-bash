@@ -263,6 +263,20 @@ function isPrivateIpv4(ip: [number, number, number, number]): boolean {
   if (a === 192 && b === 168) return true; // 192.168.0.0/16
   if (a === 169 && b === 254) return true; // 169.254.0.0/16
   if (a === 0) return true; // 0.0.0.0/8
+  // CGNAT / Shared Address Space (RFC 6598)
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10
+  // Benchmarking (RFC 2544)
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15
+  // IETF Protocol Assignments (RFC 6890)
+  if (a === 192 && b === 0 && ip[2] === 0) return true; // 192.0.0.0/24
+  // TEST-NET-1 (RFC 5737)
+  if (a === 192 && b === 0 && ip[2] === 2) return true; // 192.0.2.0/24
+  // TEST-NET-2 (RFC 5737)
+  if (a === 198 && b === 51 && ip[2] === 100) return true; // 198.51.100.0/24
+  // TEST-NET-3 (RFC 5737)
+  if (a === 203 && b === 0 && ip[2] === 113) return true; // 203.0.113.0/24
+  // Reserved + broadcast (RFC 1112)
+  if (a >= 240) return true; // 240.0.0.0/4
   return false;
 }
 
@@ -296,6 +310,44 @@ function isPrivateIpv6(hextets: number[]): boolean {
       hextets[7] & 0xff,
     ];
     return isPrivateIpv4(mapped);
+  }
+
+  // 2001:db8::/32 — Documentation prefix (RFC 3849)
+  if (hextets[0] === 0x2001 && hextets[1] === 0x0db8) return true;
+
+  // 64:ff9b::/96 — NAT64 well-known prefix (RFC 6052)
+  // Embedded IPv4 is in the last 32 bits (hextets[6..7])
+  if (
+    hextets[0] === 0x0064 &&
+    hextets[1] === 0xff9b &&
+    hextets[2] === 0 &&
+    hextets[3] === 0 &&
+    hextets[4] === 0 &&
+    hextets[5] === 0
+  ) {
+    const embedded: [number, number, number, number] = [
+      (hextets[6] >>> 8) & 0xff,
+      hextets[6] & 0xff,
+      (hextets[7] >>> 8) & 0xff,
+      hextets[7] & 0xff,
+    ];
+    return isPrivateIpv4(embedded);
+  }
+
+  // 64:ff9b:1::/48 — NAT64 local-use prefix (RFC 8215)
+  if (hextets[0] === 0x0064 && hextets[1] === 0xff9b && hextets[2] === 0x0001) {
+    return true;
+  }
+
+  // 2002::/16 — 6to4 (RFC 3056), embedded IPv4 in bits 16-47 (hextets[1..2])
+  if (hextets[0] === 0x2002) {
+    const embedded: [number, number, number, number] = [
+      (hextets[1] >>> 8) & 0xff,
+      hextets[1] & 0xff,
+      (hextets[2] >>> 8) & 0xff,
+      hextets[2] & 0xff,
+    ];
+    return isPrivateIpv4(embedded);
   }
 
   return false;
