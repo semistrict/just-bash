@@ -909,6 +909,12 @@ export class DefenseInDepthBox {
     // Array.map/filter, for...of, type coercion, and instanceof.
     this.lockWellKnownSymbols();
 
+    // Block Proxy.revocable to prevent bypassing Proxy constructor blocking.
+    // Runs after the main loop wraps globalThis.Proxy; property operations on
+    // the blocking proxy (which has no get/defineProperty traps) pass through
+    // to the original Proxy constructor, so we can patch revocable in place.
+    this.protectProxyRevocable();
+
     // Note: process.connected is NOT blocked in the main thread — it is a
     // boolean primitive used by Node.js IPC internals and blocking it
     // interferes with test runners and process managers. It IS blocked in
@@ -1489,6 +1495,120 @@ export class DefenseInDepthBox {
     // Lock Symbol.toPrimitive where defined (controls type coercion)
     lock(Symbol.prototype, Symbol.toPrimitive);
     lock(Date.prototype, Symbol.toPrimitive);
+
+    // Lock RegExp Symbol methods (controls String.prototype.match/replace/search/split behavior)
+    for (const sym of [
+      Symbol.match,
+      Symbol.matchAll,
+      Symbol.replace,
+      Symbol.search,
+      Symbol.split,
+    ]) {
+      // biome-ignore lint/style/noRestrictedGlobals: intentional access to built-in RegExp prototype for security locking
+      lock(RegExp.prototype, sym);
+    }
+
+    // Lock Symbol.hasInstance (controls instanceof behavior)
+    lock(Function.prototype, Symbol.hasInstance);
+
+    // Lock Symbol.unscopables (controls with-statement scoping)
+    lock(Array.prototype, Symbol.unscopables);
+
+    // Lock Symbol.toStringTag (prevents type spoofing via Object.prototype.toString)
+    for (const proto of [
+      Map.prototype,
+      Set.prototype,
+      Promise.prototype,
+      ArrayBuffer.prototype,
+    ]) {
+      lock(proto, Symbol.toStringTag);
+    }
+
+    // Freeze Error.stackTraceLimit to prevent stack trace depth manipulation.
+    // Uses configurable: true so it can be restored on deactivation (test
+    // frameworks like Vitest modify stackTraceLimit for error reporting).
+    try {
+      const stackDesc = Object.getOwnPropertyDescriptor(
+        Error,
+        "stackTraceLimit",
+      );
+      this.originalDescriptors.push({
+        target: Error,
+        prop: "stackTraceLimit",
+        descriptor: stackDesc,
+      });
+      Object.defineProperty(Error, "stackTraceLimit", {
+        value: Error.stackTraceLimit,
+        writable: false,
+        configurable: true,
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /**
+   * Block Proxy.revocable to prevent bypassing Proxy constructor blocking.
+   *
+   * Proxy.revocable internally uses the real Proxy constructor, so it bypasses
+   * our blocking proxy on globalThis.Proxy. We replace it with a wrapper that
+   * checks the sandbox context before delegating to the original.
+   */
+  private protectProxyRevocable(): void {
+    const box = this;
+
+    try {
+      // globalThis.Proxy is already the blocking proxy at this point, but
+      // property operations pass through to the original Proxy constructor
+      // (no get/set/defineProperty traps on the blocking proxy).
+      const originalRevocable = Proxy.revocable;
+      if (typeof originalRevocable !== "function") return;
+
+      const descriptor = Object.getOwnPropertyDescriptor(Proxy, "revocable");
+      this.originalDescriptors.push({
+        target: Proxy,
+        prop: "revocable",
+        descriptor,
+      });
+
+      Object.defineProperty(Proxy, "revocable", {
+        value: function revocable(
+          target: object,
+          handler: ProxyHandler<object>,
+        ) {
+          if (box.shouldBlock()) {
+            const message =
+              "Proxy.revocable is blocked during script execution";
+            const violation = box.recordViolation(
+              "proxy",
+              "Proxy.revocable",
+              message,
+            );
+            throw new SecurityViolationError(message, violation);
+          }
+          // Record in audit mode
+          if (
+            box.config.auditMode &&
+            executionContext?.getStore()?.sandboxActive === true
+          ) {
+            box.recordViolation(
+              "proxy",
+              "Proxy.revocable",
+              "Proxy.revocable called (audit mode)",
+            );
+          }
+          return originalRevocable(target, handler);
+        },
+        writable: false,
+        configurable: true, // Must be configurable for restoration
+      });
+    } catch (e) {
+      this.patchFailures.push("Proxy.revocable");
+      console.debug(
+        "[DefenseInDepthBox] Could not protect Proxy.revocable:",
+        e instanceof Error ? e.message : e,
+      );
+    }
   }
 
   /**

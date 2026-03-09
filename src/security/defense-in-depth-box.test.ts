@@ -557,28 +557,23 @@ describe("DefenseInDepthBox", () => {
         expect(error).toBeInstanceOf(SecurityViolationError);
       });
 
-      it("should NOT block Proxy.revocable (known limitation)", async () => {
-        // Known limitation: Proxy.revocable is a static method that internally
-        // uses the original Proxy constructor, bypassing our proxy. This is
-        // acceptable because:
-        // 1. Defense-in-depth is a secondary layer
-        // 2. Primary sandboxing should prevent access to Proxy entirely
-        // 3. Direct `new Proxy()` calls ARE blocked
+      it("should block Proxy.revocable", async () => {
         const box = DefenseInDepthBox.getInstance(true);
         const handle = box.activate();
 
-        let result: { proxy: object; revoke: () => void } | undefined;
+        let error: Error | undefined;
         await handle.run(async () => {
-          // This bypasses our proxy because revocable uses internal Proxy
-          result = Proxy.revocable({}, {});
+          try {
+            Proxy.revocable({}, {});
+          } catch (e) {
+            error = e as Error;
+          }
         });
 
         handle.deactivate();
 
-        // This succeeds - it's a known limitation
-        expect(result).toBeDefined();
-        expect(result?.proxy).toBeDefined();
-        expect(typeof result?.revoke).toBe("function");
+        expect(error).toBeInstanceOf(SecurityViolationError);
+        expect(error?.message).toContain("Proxy.revocable");
       });
 
       it("should block Proxy with function target", async () => {
@@ -1599,59 +1594,70 @@ describe("DefenseInDepthBox", () => {
 
   describe("bypass attempt vectors", () => {
     describe("Proxy.revocable attack vector", () => {
-      it("should allow Proxy.revocable to create proxies (known limitation)", async () => {
-        // This demonstrates that Proxy.revocable bypasses our protection.
-        // It's a known limitation documented in the code.
+      it("should block Proxy.revocable interception attempts", async () => {
         const box = DefenseInDepthBox.getInstance(true);
         const handle = box.activate();
 
-        let interceptedValue: string | undefined;
+        let error: Error | undefined;
         await handle.run(async () => {
-          // Attacker can create a proxy using Proxy.revocable
-          const { proxy } = Proxy.revocable(
-            { secret: "original" },
-            {
-              get: (_target, prop) => {
-                if (prop === "secret") return "intercepted!";
-                return undefined;
+          try {
+            // Attacker tries to create an intercepting proxy via revocable
+            Proxy.revocable(
+              { secret: "original" },
+              {
+                get: (_target, prop) => {
+                  if (prop === "secret") return "intercepted!";
+                  return undefined;
+                },
               },
-            },
-          );
-          interceptedValue = (proxy as { secret: string }).secret;
+            );
+          } catch (e) {
+            error = e as Error;
+          }
         });
 
         handle.deactivate();
 
-        // This succeeds - Proxy.revocable bypasses our blocking
-        expect(interceptedValue).toBe("intercepted!");
+        expect(error).toBeInstanceOf(SecurityViolationError);
+        expect(error?.message).toContain("Proxy.revocable");
       });
 
-      it("should demonstrate Proxy.revocable could be used for malicious interception", async () => {
-        // This shows a more realistic attack: intercepting function calls
+      it("should block Proxy.revocable function interception attempts", async () => {
         const box = DefenseInDepthBox.getInstance(true);
         const handle = box.activate();
 
-        let wasIntercepted = false;
-        let result: number | undefined;
+        let error: Error | undefined;
         await handle.run(async () => {
-          const originalFn = (x: number) => x * 2;
-
-          // Create intercepting proxy via revocable
-          const { proxy: interceptedFn } = Proxy.revocable(originalFn, {
-            apply: (_target, _thisArg, args) => {
-              wasIntercepted = true;
-              return (args[0] as number) * 100; // Malicious modification
-            },
-          });
-
-          result = (interceptedFn as (x: number) => number)(5);
+          try {
+            const originalFn = (x: number) => x * 2;
+            // Attempt to create intercepting proxy via revocable
+            Proxy.revocable(originalFn, {
+              apply: (_target, _thisArg, args) => {
+                return (args[0] as number) * 100;
+              },
+            });
+          } catch (e) {
+            error = e as Error;
+          }
         });
 
         handle.deactivate();
 
-        // Attacker successfully intercepted and modified the result
-        expect(wasIntercepted).toBe(true);
-        expect(result).toBe(500);
+        expect(error).toBeInstanceOf(SecurityViolationError);
+        expect(error?.message).toContain("Proxy.revocable");
+      });
+
+      it("should allow Proxy.revocable outside sandbox context", () => {
+        const box = DefenseInDepthBox.getInstance(true);
+        const handle = box.activate();
+
+        // Outside run() context - should work
+        const { proxy, revoke } = Proxy.revocable({}, {});
+        expect(proxy).toBeDefined();
+        expect(typeof revoke).toBe("function");
+        revoke();
+
+        handle.deactivate();
       });
     });
 

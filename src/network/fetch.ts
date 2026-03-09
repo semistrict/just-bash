@@ -7,9 +7,11 @@
  * 3. Provides timeout support
  */
 
+import { lookup as dnsLookup } from "node:dns";
 import { DefenseInDepthBox } from "../security/defense-in-depth-box.js";
 import { _clearTimeout, _setTimeout } from "../timers.js";
 import { isPrivateIp, isUrlAllowed, validateAllowList } from "./allow-list.js";
+import type { DnsLookupResult } from "./types.js";
 import {
   type FetchResult,
   type HttpMethod,
@@ -20,6 +22,16 @@ import {
   ResponseTooLargeError,
   TooManyRedirectsError,
 } from "./types.js";
+
+// DNS resolution for private IP check
+function dnsLookupAll(hostname: string): Promise<DnsLookupResult[]> {
+  return new Promise<DnsLookupResult[]>((resolve, reject) => {
+    dnsLookup(hostname, { all: true }, (err, addresses) => {
+      if (err) reject(err);
+      else resolve(addresses);
+    });
+  });
+}
 
 const DEFAULT_MAX_REDIRECTS = 20;
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -75,23 +87,57 @@ export function createSecureFetch(config: NetworkConfig): SecureFetch {
   const denyPrivateRanges =
     config.denyPrivateRanges ??
     (typeof process !== "undefined" && process.env?.NODE_ENV === "production");
+  const resolveDns = config._dnsResolve ?? dnsLookupAll;
 
   /**
    * Checks if a URL is allowed by the configuration.
    * @throws NetworkAccessDeniedError if the URL is not allowed
    */
-  function checkAllowed(url: string): void {
+  async function checkAllowed(url: string): Promise<void> {
     // Private IP check runs BEFORE the full-access bypass so that
     // dangerouslyAllowFullInternetAccess never allows reaching
     // internal/loopback addresses.
     if (denyPrivateRanges) {
       try {
         const parsed = new URL(url);
+        // Lexical check (fast path: catches IP literals and localhost)
         if (isPrivateIp(parsed.hostname)) {
           throw new NetworkAccessDeniedError(
             url,
             "private/loopback IP address blocked",
           );
+        }
+        // DNS resolution check (catches domains resolving to private IPs).
+        // Skip for IP literals — they were already checked lexically above
+        // and dns.lookup would just return the same address.
+        const hostname = parsed.hostname;
+        const isDomainName = /[a-zA-Z]/.test(hostname);
+        if (isDomainName) {
+          try {
+            const addresses = await resolveDns(hostname);
+            for (const { address } of addresses) {
+              if (isPrivateIp(address)) {
+                throw new NetworkAccessDeniedError(
+                  url,
+                  "hostname resolves to private/loopback IP address",
+                );
+              }
+            }
+          } catch (dnsErr) {
+            if (dnsErr instanceof NetworkAccessDeniedError) throw dnsErr;
+            // ENOTFOUND means the domain doesn't exist — it can't resolve
+            // to a private IP, so it's safe to let the fetch fail naturally.
+            const code = (dnsErr as NodeJS.ErrnoException)?.code;
+            if (code === "ENOTFOUND" || code === "ENODATA") {
+              // Domain doesn't exist; no rebinding risk
+            } else {
+              // Unexpected DNS error: fail closed (block)
+              throw new NetworkAccessDeniedError(
+                url,
+                "DNS resolution failed for private IP check",
+              );
+            }
+          }
         }
       } catch (e) {
         if (e instanceof NetworkAccessDeniedError) throw e;
@@ -133,7 +179,7 @@ export function createSecureFetch(config: NetworkConfig): SecureFetch {
     const method = options.method?.toUpperCase() ?? "GET";
 
     // Check if URL and method are allowed
-    checkAllowed(url);
+    await checkAllowed(url);
     checkMethodAllowed(method);
 
     let currentUrl = url;
@@ -186,7 +232,7 @@ export function createSecureFetch(config: NetworkConfig): SecureFetch {
 
           // Check redirect target against allow-list and private IP ranges
           try {
-            checkAllowed(redirectUrl);
+            await checkAllowed(redirectUrl);
           } catch {
             throw new RedirectNotAllowedError(redirectUrl);
           }

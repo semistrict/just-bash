@@ -193,6 +193,40 @@ export async function expectBlockedPrivate(
 }
 
 /**
+ * Utility for testing that a URL is blocked due to DNS-resolved private IP
+ */
+export async function expectBlockedDnsPrivate(
+  env: EnvAdapter,
+  url: string,
+  expectedUrl?: string,
+): Promise<void> {
+  const result = await env.exec(`curl "${url}"`);
+  expect(result.exitCode).toBe(7);
+  expect(result.stdout).toBe("");
+  const blockedUrl = expectedUrl ?? url;
+  expect(result.stderr).toBe(
+    `curl: (7) Network access denied: hostname resolves to private/loopback IP address: ${blockedUrl}\n`,
+  );
+}
+
+/**
+ * Utility for testing that a URL is blocked due to DNS resolution failure (fail-closed)
+ */
+export async function expectBlockedDnsFailure(
+  env: EnvAdapter,
+  url: string,
+  expectedUrl?: string,
+): Promise<void> {
+  const result = await env.exec(`curl "${url}"`);
+  expect(result.exitCode).toBe(7);
+  expect(result.stdout).toBe("");
+  const blockedUrl = expectedUrl ?? url;
+  expect(result.stderr).toBe(
+    `curl: (7) Network access denied: DNS resolution failed for private IP check: ${blockedUrl}\n`,
+  );
+}
+
+/**
  * Utility for testing that a URL succeeds with expected mock response
  */
 export async function expectAllowed(

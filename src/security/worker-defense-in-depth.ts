@@ -535,6 +535,11 @@ export class WorkerDefenseInDepth {
 
     // Lock well-known Symbol properties to prevent hijacking
     this.lockWellKnownSymbols();
+
+    // Block Proxy.revocable to prevent bypassing Proxy constructor blocking
+    if (!excludeTypes.has("proxy")) {
+      this.protectProxyRevocable();
+    }
   }
 
   /**
@@ -577,6 +582,105 @@ export class WorkerDefenseInDepth {
     }
     lock(Symbol.prototype, Symbol.toPrimitive);
     lock(Date.prototype, Symbol.toPrimitive);
+
+    // Lock RegExp Symbol methods (controls String.prototype.match/replace/search/split behavior)
+    for (const sym of [
+      Symbol.match,
+      Symbol.matchAll,
+      Symbol.replace,
+      Symbol.search,
+      Symbol.split,
+    ]) {
+      // biome-ignore lint/style/noRestrictedGlobals: intentional access to built-in RegExp prototype for security locking
+      lock(RegExp.prototype, sym);
+    }
+
+    // Lock Symbol.hasInstance (controls instanceof behavior)
+    lock(Function.prototype, Symbol.hasInstance);
+
+    // Lock Symbol.unscopables (controls with-statement scoping)
+    lock(Array.prototype, Symbol.unscopables);
+
+    // Lock Symbol.toStringTag (prevents type spoofing via Object.prototype.toString)
+    for (const proto of [
+      Map.prototype,
+      Set.prototype,
+      Promise.prototype,
+      ArrayBuffer.prototype,
+    ]) {
+      lock(proto, Symbol.toStringTag);
+    }
+
+    // Freeze Error.stackTraceLimit to prevent stack trace depth manipulation.
+    // Uses configurable: true so it can be restored on deactivation.
+    try {
+      const stackDesc = Object.getOwnPropertyDescriptor(
+        Error,
+        "stackTraceLimit",
+      );
+      this.originalDescriptors.push({
+        target: Error,
+        prop: "stackTraceLimit",
+        descriptor: stackDesc,
+      });
+      Object.defineProperty(Error, "stackTraceLimit", {
+        value: Error.stackTraceLimit,
+        writable: false,
+        configurable: true,
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /**
+   * Block Proxy.revocable to prevent bypassing Proxy constructor blocking.
+   *
+   * Proxy.revocable internally uses the real Proxy constructor, so it bypasses
+   * our blocking proxy on globalThis.Proxy. We replace it with a wrapper that
+   * always blocks in worker context.
+   */
+  private protectProxyRevocable(): void {
+    const self = this;
+    const auditMode = this.config.auditMode;
+
+    try {
+      const originalRevocable = this.originalProxy.revocable;
+      if (typeof originalRevocable !== "function") return;
+
+      const descriptor = Object.getOwnPropertyDescriptor(
+        this.originalProxy,
+        "revocable",
+      );
+      this.originalDescriptors.push({
+        target: this.originalProxy,
+        prop: "revocable",
+        descriptor,
+      });
+
+      Object.defineProperty(this.originalProxy, "revocable", {
+        value: function revocable(
+          _target: object,
+          _handler: ProxyHandler<object>,
+        ) {
+          const message = "Proxy.revocable is blocked in worker context";
+          const violation = self.recordViolation(
+            "proxy",
+            "Proxy.revocable",
+            message,
+          );
+
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return originalRevocable(_target, _handler);
+        },
+        writable: false,
+        configurable: true, // Must be configurable for restoration
+      });
+    } catch {
+      // Could not protect Proxy.revocable
+    }
   }
 
   /**

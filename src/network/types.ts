@@ -6,6 +6,14 @@
  */
 
 /**
+ * DNS lookup result used for private IP resolution checks
+ */
+export interface DnsLookupResult {
+  address: string;
+  family: number;
+}
+
+/**
  * HTTP methods that can be allowed
  */
 export type HttpMethod =
@@ -70,7 +78,8 @@ export interface NetworkConfig {
 
   /**
    * Reject URLs with private/loopback IP addresses as hostnames.
-   * This is a URL/hostname-level check only (no DNS resolution).
+   * Performs both lexical hostname checks and DNS resolution to catch
+   * domains that resolve to private IPs (e.g., DNS rebinding attacks).
    * Useful for mitigating SSRF attacks. Default: false (opt-in).
    *
    * When enabled, the private IP check is enforced even when
@@ -78,6 +87,13 @@ export interface NetworkConfig {
    * internal/loopback addresses are never reachable.
    */
   denyPrivateRanges?: boolean;
+
+  /**
+   * @internal Override DNS resolution for testing.
+   * When set, used instead of the default `dns.lookup` for the
+   * denyPrivateRanges DNS rebinding check.
+   */
+  _dnsResolve?: (hostname: string) => Promise<DnsLookupResult[]>;
 }
 
 /**
