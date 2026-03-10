@@ -893,7 +893,7 @@ describe("js-exec Node.js compatibility", () => {
       const result = await env.exec(
         `js-exec -c "var f = require('util').format; console.log(f('%i', 3.7)); console.log(f('%j', {a:1})); console.log(f('%f', '3.14'))"`,
       );
-      expect(result.stdout).toBe('3.7\n{"a":1}\n3.14\n');
+      expect(result.stdout).toBe('3\n{"a":1}\n3.14\n');
       expect(result.exitCode).toBe(0);
     });
 

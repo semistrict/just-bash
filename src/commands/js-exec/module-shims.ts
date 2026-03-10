@@ -200,7 +200,8 @@ var _util = {
       if (i >= args.length) return m;
       var v = args[i++];
       if (m === '%s') return String(v);
-      if (m === '%d' || m === '%i') return Number(v).toString();
+      if (m === '%d') return Number(v).toString();
+      if (m === '%i') { var n = Number(v); return (isNaN(n) ? 'NaN' : Math.trunc(n)).toString(); }
       if (m === '%j') return JSON.stringify(v);
       if (m === '%f') return parseFloat(v).toString();
       if (m === '%o' || m === '%O') return JSON.stringify(v);

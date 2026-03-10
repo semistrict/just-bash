@@ -1088,6 +1088,7 @@ async function executeCode(
       const initResult = context.evalCode(
         `{
           // --- Block dynamic code compilation ---
+          // @banned-pattern-ignore: intentional sandbox hardening — removes eval/Function inside QuickJS guest, not the host
           Object.defineProperty(globalThis, 'eval', {
             value: undefined,
             writable: false,
@@ -1117,6 +1118,7 @@ async function executeCode(
               configurable: false,
             });
           }
+          // @banned-pattern-ignore: intentional sandbox hardening — replaces Function constructor inside QuickJS guest
           Object.defineProperty(globalThis, 'Function', {
             value: BlockedFunction,
             writable: false,
@@ -1215,10 +1217,17 @@ async function executeCode(
         "<sandbox-init>",
       );
       if (initResult.error) {
+        const errVal = context.dump(initResult.error);
         initResult.error.dispose();
-      } else {
-        initResult.value.dispose();
+        const msg =
+          typeof errVal === "object" && errVal !== null && "message" in errVal
+            ? (errVal as { message: string }).message
+            : String(errVal);
+        backend.writeStderr(`js-exec: sandbox hardening failed: ${msg}\n`);
+        backend.exit(1);
+        return { success: true };
       }
+      initResult.value.dispose();
     }
 
     // Set up module loader if module mode is enabled

@@ -53,9 +53,10 @@ describe("js-exec security", () => {
     it("should block eval()", async () => {
       const env = new Bash({ javascript: true });
       const result = await env.exec(
-        `js-exec -c "try { eval('1+1'); console.log('FAIL'); } catch(e) { console.log(e.message); }"`,
+        `js-exec -c "try { eval('1+1'); console.log('FAIL'); } catch(e) { console.log(e.constructor.name + ': ' + e.message); }"`,
       );
-      expect(result.stdout).not.toContain("FAIL");
+      expect(result.stdout).toBe("TypeError: not a function\n");
+      expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
     });
 
@@ -64,7 +65,8 @@ describe("js-exec security", () => {
       const result = await env.exec(
         `js-exec -c "try { new Function('return 1')(); console.log('FAIL'); } catch(e) { console.log(e.message); }"`,
       );
-      expect(result.stdout).not.toContain("FAIL");
+      expect(result.stdout).toBe("Function constructor is not allowed\n");
+      expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
     });
 
@@ -73,7 +75,8 @@ describe("js-exec security", () => {
       const result = await env.exec(
         `js-exec -c "try { ({}).constructor.constructor('return 42')(); console.log('FAIL'); } catch(e) { console.log(e.message); }"`,
       );
-      expect(result.stdout).not.toContain("FAIL");
+      expect(result.stdout).toBe("Function constructor is not allowed\n");
+      expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
     });
 
@@ -82,7 +85,8 @@ describe("js-exec security", () => {
       const result = await env.exec(
         `js-exec -c "try { const AF = (async function(){}).constructor; new AF('return 1')(); console.log('FAIL'); } catch(e) { console.log(e.message); }"`,
       );
-      expect(result.stdout).not.toContain("FAIL");
+      expect(result.stdout).toBe("Function constructor is not allowed\n");
+      expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
     });
 
@@ -91,7 +95,8 @@ describe("js-exec security", () => {
       const result = await env.exec(
         `js-exec -c "try { const GF = (function*(){}).constructor; new GF('yield 1')().next(); console.log('FAIL'); } catch(e) { console.log(e.message); }"`,
       );
-      expect(result.stdout).not.toContain("FAIL");
+      expect(result.stdout).toBe("Function constructor is not allowed\n");
+      expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
     });
 
@@ -100,7 +105,8 @@ describe("js-exec security", () => {
       const result = await env.exec(
         `js-exec -c "try { const AGF = (async function*(){}).constructor; new AGF('yield 1')(); console.log('FAIL'); } catch(e) { console.log(e.message); }"`,
       );
-      expect(result.stdout).not.toContain("FAIL");
+      expect(result.stdout).toBe("Function constructor is not allowed\n");
+      expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
     });
   });
