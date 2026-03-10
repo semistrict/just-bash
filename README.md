@@ -25,6 +25,7 @@ Supports optional network access via `curl` with secure-by-default URL filtering
 - [Shell Features](#shell-features)
 - [Default Layout](#default-layout)
 - [Network Access](#network-access)
+- [JavaScript Support](#javascript-support)
 - [Execution Protection](#execution-protection)
 - [AST Transform Plugins](#ast-transform-plugins)
 - [Development](#development)
@@ -68,11 +69,43 @@ const env = new Bash({
   env: { MY_VAR: "value" }, // Initial environment
   cwd: "/app", // Starting directory (default: /home/user)
   executionLimits: { maxCallDepth: 50 }, // See "Execution Protection"
+  python: true, // Enable python3/python commands
+  javascript: true, // Enable js-exec command
+  // Or with bootstrap: javascript: { bootstrap: "globalThis.X = 1;" }
 });
 
 // Per-exec overrides
 await env.exec("echo $TEMP", { env: { TEMP: "value" }, cwd: "/tmp" });
+
+// Pass stdin to the script
+await env.exec("cat", { stdin: "hello from stdin\n" });
+
+// Start with a clean environment
+await env.exec("env", { replaceEnv: true, env: { ONLY: "this" } });
+
+// Pass arguments without shell escaping (like spawnSync)
+await env.exec("grep", { args: ["-r", "TODO", "src/"] });
+
+// Cancel long-running scripts
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 5000);
+await env.exec("while true; do sleep 1; done", { signal: controller.signal });
+
+// Preserve leading whitespace (e.g., for heredocs)
+await env.exec("cat <<EOF\n  indented\nEOF", { rawScript: true });
 ```
+
+`exec()` options:
+
+| Option | Type | Description |
+|---|---|---|
+| `env` | `Record<string, string>` | Environment variables for this execution only |
+| `cwd` | `string` | Working directory for this execution only |
+| `stdin` | `string` | Standard input passed to the script |
+| `args` | `string[]` | Positional parameters ($1, $2, ...) without shell escaping |
+| `replaceEnv` | `boolean` | Start with empty env instead of merging (default: `false`) |
+| `signal` | `AbortSignal` | Cooperative cancellation; stops at next statement boundary |
+| `rawScript` | `boolean` | Skip leading-whitespace normalization (default: `false`) |
 
 #### Lazy Files
 
@@ -300,7 +333,7 @@ pnpm shell --no-network
 
 ### Data Processing
 
-`jq` (JSON), `python3`/`python` (Python via Pyodide; required opt-in), `sqlite3` (SQLite), `xan` (CSV), `yq` (YAML/XML/TOML/CSV)
+`jq` (JSON), `js-exec` (JavaScript/TypeScript via QuickJS; requires opt-in), `python3`/`python` (Python via WASM/CPython; requires opt-in), `sqlite3` (SQLite), `xan` (CSV), `yq` (YAML/XML/TOML/CSV)
 
 ### Compression & Archives
 
@@ -379,7 +412,7 @@ const env = new Bash({
 
 ## Python Support
 
-Python support via Pyodide is opt-in due to additional security surface. Enable it explicitly, but be aware of the risk:
+Python support via WASM/CPython is opt-in due to additional security surface. Enable it explicitly, but be aware of the risk:
 
 ```typescript
 const env = new Bash({
@@ -394,6 +427,58 @@ await env.exec('python3 script.py');
 ```
 
 **Note:** The `python3` and `python` commands only exist when `python: true` is configured. Python is not available in browser environments.
+
+## JavaScript Support
+
+JavaScript and TypeScript execution via QuickJS is opt-in. Enable it with the `javascript` option:
+
+```typescript
+const env = new Bash({
+  javascript: true,
+});
+
+// Execute JavaScript code
+await env.exec('js-exec -c "console.log(1 + 2)"');
+
+// Run script files (.js, .mjs, .ts, .mts)
+await env.exec('js-exec script.js');
+
+// ES module mode with imports
+await env.exec('js-exec -m -c "import fs from \'fs\'; console.log(fs.readFileSync(\'/data/file.txt\', \'utf8\'))"');
+```
+
+### Bootstrap Code
+
+You can run setup code before every `js-exec` invocation using the `bootstrap` option. This is useful for injecting polyfills, global utilities, or environment setup:
+
+```typescript
+const env = new Bash({
+  javascript: {
+    bootstrap: `
+      globalThis.API_BASE = "https://api.example.com";
+      globalThis.formatDate = (d) => new Date(d).toISOString();
+    `,
+  },
+});
+
+await env.exec('js-exec -c "console.log(API_BASE)"');
+// Output: https://api.example.com
+```
+
+### Node.js Compatibility
+
+`js-exec` provides broad Node.js compatibility. Both `require()` and `import` are supported:
+
+- **fs**: `readFileSync`, `writeFileSync`, `readdirSync`, `statSync`, `existsSync`, `mkdirSync`, `rmSync`, `fs.promises.*`
+- **path**: `join`, `resolve`, `dirname`, `basename`, `extname`, `relative`, `normalize`
+- **child_process**: `execSync`, `spawnSync`
+- **process**: `argv`, `cwd()`, `exit()`, `env`, `platform`, `version`
+- **Other modules**: `os`, `url`, `assert`, `util`, `events`, `buffer`, `stream`, `string_decoder`, `querystring`
+- **Globals**: `console`, `fetch`, `Buffer`, `URL`, `URLSearchParams`
+
+`fs.readFileSync()` returns a `Buffer` by default (matching Node.js). Pass an encoding like `'utf8'` to get a string.
+
+**Note:** The `js-exec` command only exists when `javascript` is configured. It is not available in browser environments. Execution runs in a QuickJS WASM sandbox with a 64 MB memory limit and configurable timeout (default: 10s, 60s with network).
 
 ## SQLite Support
 

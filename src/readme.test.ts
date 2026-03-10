@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { Bash } from "./Bash.js";
 import {
   getCommandNames,
+  getJavaScriptCommandNames,
   getNetworkCommandNames,
   getPythonCommandNames,
 } from "./commands/registry.js";
@@ -320,6 +321,7 @@ describe("README validation", () => {
         ...getCommandNames(),
         ...getNetworkCommandNames(),
         ...getPythonCommandNames(),
+        ...getJavaScriptCommandNames(),
       ]);
 
       // Commands in registry but not in README
@@ -382,6 +384,7 @@ describe("AGENTS.npm.md validation", () => {
         ...getCommandNames(),
         ...getNetworkCommandNames(),
         ...getPythonCommandNames(),
+        ...getJavaScriptCommandNames(),
       ]);
 
       // Commands in registry but not in AGENTS.npm.md

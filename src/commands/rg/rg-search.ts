@@ -718,13 +718,11 @@ async function readFileContent(
       const filename = file.split("/").pop() || file;
       if (matchesPreGlob(filename, options.preprocessorGlobs)) {
         // Run preprocessor on this file
-        const result = await ctx.exec(
-          shellJoinArgs([options.preprocessor, filePath]),
-          {
-            cwd: ctx.cwd,
-            signal: ctx.signal,
-          },
-        );
+        const result = await ctx.exec(shellJoinArgs([options.preprocessor]), {
+          cwd: ctx.cwd,
+          signal: ctx.signal,
+          args: [filePath],
+        });
         if (result.exitCode === 0 && result.stdout) {
           const sample = result.stdout.slice(0, 8192);
           return { content: result.stdout, isBinary: sample.includes("\0") };

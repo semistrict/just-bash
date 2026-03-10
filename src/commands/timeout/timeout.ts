@@ -115,9 +115,6 @@ export const timeoutCommand: Command = {
       };
     }
 
-    // Build command string from argv-style tokens using shell-safe quoting
-    const commandStr = shellJoinArgs(commandArgs);
-
     // Use AbortController for cooperative cancellation.
     // When the timeout fires, the signal is aborted, causing the interpreter
     // to stop at the next statement boundary — no post-timeout side effects.
@@ -133,10 +130,11 @@ export const timeoutCommand: Command = {
       });
 
       const execPromise = ctx
-        .exec(commandStr, {
+        .exec(shellJoinArgs([commandArgs[0]]), {
           cwd: ctx.cwd,
           signal: controller.signal,
           stdin: ctx.stdin,
+          args: commandArgs.slice(1),
         })
         .then((result) => ({ timedOut: false as const, result }));
 

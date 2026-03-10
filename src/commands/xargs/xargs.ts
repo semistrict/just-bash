@@ -1,3 +1,4 @@
+import { shellJoinArgs } from "../../helpers/shell-quote.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
@@ -137,16 +138,20 @@ export const xargsCommand: Command = {
 
     // Helper to execute a single command via the shell
     const executeCommand = async (cmdArgs: string[]): Promise<ExecResult> => {
-      // Build the command string for execution, properly quoting arguments
-      const cmdLine = cmdArgs.map(quoteArg).join(" ");
       if (verbose) {
+        const cmdLine = cmdArgs.map(quoteArg).join(" ");
         stderr += `${cmdLine}\n`;
       }
       // Use ctx.exec to run the command, passing current working directory
       if (ctx.exec) {
-        return ctx.exec(cmdLine, { cwd: ctx.cwd, signal: ctx.signal });
+        return ctx.exec(shellJoinArgs([cmdArgs[0]]), {
+          cwd: ctx.cwd,
+          signal: ctx.signal,
+          args: cmdArgs.slice(1),
+        });
       }
       // Fallback: just output what would be run
+      const cmdLine = cmdArgs.map(quoteArg).join(" ");
       return { stdout: `${cmdLine}\n`, stderr: "", exitCode: 0 };
     };
 

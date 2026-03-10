@@ -57,6 +57,11 @@ export interface CommandExecOptions {
    * Used by `timeout` to ensure timed-out commands don't continue running.
    */
   signal?: AbortSignal;
+  /**
+   * Arguments to the command, like child_process.spawnSync(cmd, args).
+   * Set as positional parameters ($1, $2, ...) without shell escaping.
+   */
+  args?: string[];
 }
 
 /**

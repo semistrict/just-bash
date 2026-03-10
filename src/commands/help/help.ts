@@ -108,9 +108,12 @@ Otherwise, lists all available commands.
     // If a command name is provided, delegate to that command's --help
     if (args.length > 0 && ctx.exec) {
       const cmdName = args[0];
-      return ctx.exec(shellJoinArgs([cmdName, "--help"]), {
+      // Shell-quote the command name since it comes from user input
+      // and could contain metacharacters
+      return ctx.exec(shellJoinArgs([cmdName]), {
         cwd: ctx.cwd,
         signal: ctx.signal,
+        args: ["--help"],
       });
     }
 

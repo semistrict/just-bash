@@ -256,6 +256,12 @@ export interface ExecOptions {
    * When aborted, the interpreter stops executing at the next statement boundary.
    */
   signal?: AbortSignal;
+  /**
+   * Arguments appended to the command's argument list at the interpreter level.
+   * Values bypass shell parsing entirely — no escaping, splitting, or globbing.
+   * Like child_process.spawnSync(cmd, args).
+   */
+  args?: string[];
 }
 
 export class Bash {
@@ -606,6 +612,8 @@ export class Bash {
       groupStdin: options?.stdin,
       // Cooperative cancellation signal (used by timeout command)
       signal: options?.signal,
+      // Extra arguments injected directly into first command's arg list
+      extraArgs: options?.args,
     };
 
     // Normalize indented multi-line scripts (unless rawScript is true)

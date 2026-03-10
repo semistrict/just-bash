@@ -102,7 +102,6 @@ export const timeCommand: Command = {
     const startTime = _performanceNow();
 
     // Execute the command
-    const commandString = shellJoinArgs(commandArgs);
     const displayCommand = commandArgs.join(" ");
     let result: ExecResult;
 
@@ -114,11 +113,12 @@ export const timeCommand: Command = {
           exitCode: 1,
         };
       }
-      result = await ctx.exec(commandString, {
+      result = await ctx.exec(shellJoinArgs([commandArgs[0]]), {
         env: mapToRecord(ctx.env),
         cwd: ctx.cwd,
         stdin: ctx.stdin,
         signal: ctx.signal,
+        args: commandArgs.slice(1),
       });
     } catch (error) {
       const message = sanitizeErrorMessage((error as Error).message);

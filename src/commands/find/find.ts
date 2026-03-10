@@ -878,10 +878,10 @@ export const findCommand: Command = {
                   cmdWithFiles.push(part);
                 }
               }
-              const cmd = shellJoinArgs(cmdWithFiles);
-              const result = await ctx.exec(cmd, {
+              const result = await ctx.exec(shellJoinArgs([cmdWithFiles[0]]), {
                 cwd: ctx.cwd,
                 signal: ctx.signal,
+                args: cmdWithFiles.slice(1),
               });
               stdout += result.stdout;
               stderr += result.stderr;
@@ -894,10 +894,10 @@ export const findCommand: Command = {
                 const cmdWithFile = action.command.map((part) =>
                   part === "{}" ? file : part,
                 );
-                const cmd = shellJoinArgs(cmdWithFile);
-                const result = await ctx.exec(cmd, {
+                const result = await ctx.exec(shellJoinArgs([cmdWithFile[0]]), {
                   cwd: ctx.cwd,
                   signal: ctx.signal,
+                  args: cmdWithFile.slice(1),
                 });
                 stdout += result.stdout;
                 stderr += result.stderr;

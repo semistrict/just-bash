@@ -1,5 +1,4 @@
 import { mapToRecord } from "../../helpers/env.js";
-import { shellJoinArgs } from "../../helpers/shell-quote.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
@@ -104,18 +103,16 @@ export const envCommand: Command = {
     // Use 'command' prefix to bypass shell keywords (like 'time')
     // This ensures we run the actual command, not the shell keyword
     const cmdArgs = args.slice(commandStart);
-    // Build a shell-safe command line
-    // Use 'command' prefix to bypass shell keywords (like 'time')
-    const command = shellJoinArgs(["command", ...cmdArgs]);
 
     // Execute with explicitly provided environment so untrusted values never
     // get reparsed as shell source via assignment prefixes.
-    return ctx.exec(command, {
+    return ctx.exec("command", {
       cwd: ctx.cwd,
       env: mapToRecord(newEnv),
       replaceEnv: true,
       stdin: ctx.stdin,
       signal: ctx.signal,
+      args: cmdArgs,
     });
   },
 };

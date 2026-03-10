@@ -559,12 +559,10 @@ export class BridgeHandler {
         if (parsed.stdin) {
           options.stdin = parsed.stdin;
         }
-        // Structured args: shell-escape each arg on the main thread to prevent injection
+        // Structured args: pass directly via args option (no shell escaping needed)
         if (parsed.args && Array.isArray(parsed.args)) {
-          const escapedArgs = parsed.args.map((a: unknown) => String(a));
-          if (escapedArgs.length > 0) {
-            command += ` ${shellJoinArgs(escapedArgs)}`;
-          }
+          options.args = parsed.args.map((a: unknown) => String(a));
+          command = shellJoinArgs([command]);
         }
       }
 
