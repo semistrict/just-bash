@@ -50,4 +50,23 @@ describe("js-exec child_process sub-shell", () => {
     expect(result.stdout).toBe("ABC\n");
     expect(result.exitCode).toBe(0);
   });
+
+  it(
+    "should block recursive js-exec invocation",
+    { timeout: 30000 },
+    async () => {
+      const env = new Bash({
+        javascript: true,
+        files: {
+          "/home/user/reentrant.js": `const cp = require('child_process');
+const r = cp.spawnSync('js-exec', ['-c', '1+1']);
+console.log(r.stderr.trim());
+`,
+        },
+      });
+      const result = await env.exec("js-exec /home/user/reentrant.js");
+      expect(result.stdout).toContain("recursive invocation is not supported");
+      expect(result.exitCode).toBe(0);
+    },
+  );
 });

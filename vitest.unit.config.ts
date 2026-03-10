@@ -13,6 +13,8 @@ export default defineConfig({
       "**/dist/**",
       "**/comparison-tests/**",
       "**/python3/**",
+      "**/sqlite3/**",
+      "**/js-exec/**",
       "**/python-scripting*",
     ],
     setupFiles: [resolve(__dirname, "src/vitest-setup.ts")],

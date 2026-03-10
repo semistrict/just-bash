@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryFs } from "../../fs/in-memory-fs/in-memory-fs.js";
-import { FsBridgeHandler } from "./fs-bridge-handler.js";
+import { BridgeHandler } from "../worker-bridge/bridge-handler.js";
 import {
   createSharedBuffer,
   OpCode,
   type OpCodeType,
   ProtocolBuffer,
   Status,
-} from "./protocol.js";
+} from "../worker-bridge/protocol.js";
 
 async function sendOp(
   protocol: ProtocolBuffer,
@@ -34,14 +34,15 @@ async function sendOp(
   throw new Error("sendOp timed out waiting for bridge response");
 }
 
-describe("FsBridgeHandler output limits", () => {
+describe("BridgeHandler output limits", () => {
   it("passes through stdout/stderr when total output stays within limit", async () => {
     const shared = createSharedBuffer();
     const protocol = new ProtocolBuffer(shared);
-    const handler = new FsBridgeHandler(
+    const handler = new BridgeHandler(
       shared,
       new InMemoryFs(),
       "/",
+      "python3",
       undefined,
       128,
     );
@@ -60,10 +61,11 @@ describe("FsBridgeHandler output limits", () => {
   it("enforces aggregate output cap incrementally and exits with error", async () => {
     const shared = createSharedBuffer();
     const protocol = new ProtocolBuffer(shared);
-    const handler = new FsBridgeHandler(
+    const handler = new BridgeHandler(
       shared,
       new InMemoryFs(),
       "/",
+      "python3",
       undefined,
       128,
     );

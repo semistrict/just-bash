@@ -33,6 +33,7 @@ export interface JsExecWorkerInput {
   bootstrapCode?: string;
   isModule?: boolean;
   stripTypes?: boolean;
+  timeoutMs?: number;
 }
 
 export interface JsExecWorkerOutput {
@@ -273,7 +274,11 @@ function setupContext(
       const val = context.dump(a);
       return typeof val === "string" ? val : JSON.stringify(val);
     });
-    backend.writeStdout(`${parts.join(" ")}\n`);
+    try {
+      backend.writeStdout(`${parts.join(" ")}\n`);
+    } catch (e) {
+      return throwError(context, (e as Error).message || "write failed");
+    }
     return context.undefined;
   });
   context.setProp(consoleObj, "log", logFn);
@@ -284,7 +289,11 @@ function setupContext(
       const val = context.dump(a);
       return typeof val === "string" ? val : JSON.stringify(val);
     });
-    backend.writeStderr(`${parts.join(" ")}\n`);
+    try {
+      backend.writeStderr(`${parts.join(" ")}\n`);
+    } catch (e) {
+      return throwError(context, (e as Error).message || "write failed");
+    }
     return context.undefined;
   });
   context.setProp(consoleObj, "error", errorFn);
@@ -296,7 +305,11 @@ function setupContext(
       const val = context.dump(a);
       return typeof val === "string" ? val : JSON.stringify(val);
     });
-    backend.writeStderr(`${parts.join(" ")}\n`);
+    try {
+      backend.writeStderr(`${parts.join(" ")}\n`);
+    } catch (e) {
+      return throwError(context, (e as Error).message || "write failed");
+    }
     return context.undefined;
   });
   context.setProp(consoleObj, "warn", warnFn);
@@ -808,6 +821,18 @@ function setupContext(
   }
 }
 
+// Pre-capture process.exit before defense-in-depth blocks it.
+// Used by uncaughtException handler to cleanly terminate the worker
+// when a defense violation or other fatal error occurs.
+const originalProcessExit = process.exit.bind(process);
+
+// Catch uncaught exceptions (e.g., defense-in-depth violations that escape
+// try/catch blocks). Without this, blocking process.exit causes the worker
+// to hang since Node.js's _fatalException handler can't terminate it.
+process.on("uncaughtException", () => {
+  originalProcessExit(1);
+});
+
 // Defense-in-depth instance - activated AFTER QuickJS loads
 let defense: WorkerDefenseInDepth | null = null;
 
@@ -823,14 +848,25 @@ async function initializeWithDefense(): Promise<void> {
   } catch {
     // Ignore errors during warm-up
   }
-  // Yield to let the ExperimentalWarning flush through the event loop
+  // Yield to let the ExperimentalWarning flush through the event loop.
+  // Must use setTimeout (not Promise.resolve) because the warning is a macrotask.
   await new Promise<void>((r) => setTimeout(r, 0));
 
   // Activate defense after QuickJS is loaded.
   // QuickJS needs only SharedArrayBuffer + Atomics exclusions
   // (for the sync protocol between worker and main thread).
   defense = new WorkerDefenseInDepth({
-    excludeViolationTypes: ["shared_array_buffer", "atomics"],
+    excludeViolationTypes: [
+      // SharedArrayBuffer/Atomics: Used by sync-backend for synchronous
+      // filesystem communication between the worker and main thread.
+      "shared_array_buffer",
+      "atomics",
+      // process.stdout/stderr: Emscripten (quickjs-emscripten) routes WASM
+      // stdout/stderr through Node.js console which uses process.stdout/stderr.
+      // User code runs inside QuickJS with no access to Node.js process.
+      "process_stdout",
+      "process_stderr",
+    ],
   });
 }
 
@@ -838,7 +874,7 @@ async function executeCode(
   input: JsExecWorkerInput,
 ): Promise<JsExecWorkerOutput> {
   const qjs = await getQuickJSModule();
-  const backend = new SyncBackend(input.sharedBuffer);
+  const backend = new SyncBackend(input.sharedBuffer, input.timeoutMs);
 
   let runtime: QuickJSRuntime | undefined;
   let context: QuickJSContext | undefined;
@@ -951,7 +987,11 @@ async function executeCode(
       }
 
       const errorMsg = formatError(errorVal);
-      backend.writeStderr(`${errorMsg}\n`);
+      try {
+        backend.writeStderr(`${errorMsg}\n`);
+      } catch {
+        // Output limit exceeded — ignore writeStderr failure
+      }
       backend.exit(1);
       return { success: true };
     }
@@ -972,7 +1012,11 @@ async function executeCode(
             : String(errorVal);
         if (rawPendingMsg !== "__EXIT__") {
           const errorMsg = formatError(errorVal);
-          backend.writeStderr(`${errorMsg}\n`);
+          try {
+            backend.writeStderr(`${errorMsg}\n`);
+          } catch {
+            // Output limit exceeded — ignore writeStderr failure
+          }
           backend.exit(1);
           return { success: true };
         }
@@ -994,6 +1038,10 @@ async function executeCode(
     // Try to report error and exit
     try {
       backend.writeStderr(`js-exec: ${message}\n`);
+    } catch {
+      // Output limit exceeded — ignore writeStderr failure
+    }
+    try {
       backend.exit(1);
     } catch {
       // Bridge might be broken, report via worker output
@@ -1007,26 +1055,20 @@ async function executeCode(
 }
 
 // Initial load: initialize with defense-in-depth
-initializeWithDefense()
-  .then(async () => {
-    // If there's a queued message from workerData, process it
-    // (workerData is not used - messages come via parentPort)
-  })
-  .catch((e) => {
-    parentPort?.postMessage({
-      success: false,
-      error: (e as Error).message,
-      defenseStats: defense?.getStats(),
-    });
+// Store the promise so the message handler can await the same initialization
+const initPromise = initializeWithDefense().catch((e) => {
+  parentPort?.postMessage({
+    success: false,
+    error: (e as Error).message,
+    defenseStats: defense?.getStats(),
   });
+});
 
 // Handle messages from main thread
 parentPort?.on("message", async (input: JsExecWorkerInput) => {
   try {
-    // Defense should already be active from initial load
-    if (!defense) {
-      await initializeWithDefense();
-    }
+    // Wait for the initial defense setup to complete (avoids race condition)
+    await initPromise;
     const result = await executeCode(input);
     result.defenseStats = defense?.getStats();
     parentPort?.postMessage(result);

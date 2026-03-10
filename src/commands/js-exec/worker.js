@@ -62,7 +62,33 @@ function getBlockedGlobals() {
       target: process,
       violationType: "process_env",
       strategy: "throw",
-      reason: "process.env could leak sensitive environment variables"
+      reason: "process.env could leak sensitive environment variables",
+      // Node.js internals and bundled dependencies read these env vars
+      // during module loading, file watching, and I/O within the
+      // AsyncLocalStorage context. None are user secrets.
+      allowedKeys: /* @__PURE__ */ new Set([
+        // Node.js core
+        "NODE_V8_COVERAGE",
+        "NODE_DEBUG",
+        "NODE_DEBUG_NATIVE",
+        "NODE_COMPILE_CACHE",
+        "WATCH_REPORT_DEPENDENCIES",
+        // Dependencies
+        "FORCE_COLOR",
+        // chalk/supports-color
+        "DEBUG",
+        // debug package
+        "UNDICI_NO_FG",
+        // undici (Node.js fetch)
+        "JEST_WORKER_ID",
+        // jest/vitest worker detection
+        "__MINIMATCH_TESTING_PLATFORM__",
+        // minimatch
+        "LOG_TOKENS",
+        // query engine debug logging
+        "LOG_STREAM"
+        // query engine debug logging
+      ])
     },
     {
       prop: "binding",
@@ -85,9 +111,178 @@ function getBlockedGlobals() {
       strategy: "throw",
       reason: "process.dlopen allows loading native addons"
     },
+    {
+      prop: "getBuiltinModule",
+      target: process,
+      violationType: "process_get_builtin_module",
+      strategy: "throw",
+      reason: "process.getBuiltinModule allows loading native Node.js modules (fs, child_process, vm)"
+    },
     // Note: process.mainModule is handled specially in defense-in-depth-box.ts
     // and worker-defense-in-depth.ts because it may be undefined in ESM contexts
     // but we still want to block both reading and setting it.
+    // Process control vectors
+    {
+      prop: "exit",
+      target: process,
+      violationType: "process_exit",
+      strategy: "throw",
+      reason: "process.exit could terminate the interpreter"
+    },
+    {
+      prop: "abort",
+      target: process,
+      violationType: "process_exit",
+      strategy: "throw",
+      reason: "process.abort could crash the interpreter"
+    },
+    {
+      prop: "kill",
+      target: process,
+      violationType: "process_kill",
+      strategy: "throw",
+      reason: "process.kill could signal other processes"
+    },
+    // Privilege escalation vectors
+    {
+      prop: "setuid",
+      target: process,
+      violationType: "process_setuid",
+      strategy: "throw",
+      reason: "process.setuid could escalate privileges"
+    },
+    {
+      prop: "setgid",
+      target: process,
+      violationType: "process_setuid",
+      strategy: "throw",
+      reason: "process.setgid could escalate privileges"
+    },
+    {
+      prop: "seteuid",
+      target: process,
+      violationType: "process_setuid",
+      strategy: "throw",
+      reason: "process.seteuid could escalate effective user privileges"
+    },
+    {
+      prop: "setegid",
+      target: process,
+      violationType: "process_setuid",
+      strategy: "throw",
+      reason: "process.setegid could escalate effective group privileges"
+    },
+    {
+      prop: "initgroups",
+      target: process,
+      violationType: "process_setuid",
+      strategy: "throw",
+      reason: "process.initgroups could modify supplementary group IDs"
+    },
+    {
+      prop: "setgroups",
+      target: process,
+      violationType: "process_setuid",
+      strategy: "throw",
+      reason: "process.setgroups could modify supplementary group IDs"
+    },
+    // File permission manipulation
+    {
+      prop: "umask",
+      target: process,
+      violationType: "process_umask",
+      strategy: "throw",
+      reason: "process.umask could modify file creation permissions"
+    },
+    // Information disclosure vectors
+    // Note: process.argv is an array (object) so gets an object proxy
+    {
+      prop: "argv",
+      target: process,
+      violationType: "process_argv",
+      strategy: "throw",
+      reason: "process.argv may contain secrets in CLI arguments"
+    },
+    // Note: process.execPath is a string primitive, handled specially
+    // in defense-in-depth-box.ts and worker-defense-in-depth.ts
+    // Note: process.connected is a boolean primitive, handled specially
+    // in defense-in-depth-box.ts and worker-defense-in-depth.ts
+    // Working directory access/manipulation
+    {
+      prop: "cwd",
+      target: process,
+      violationType: "process_chdir",
+      strategy: "throw",
+      reason: "process.cwd could disclose real host working directory path"
+    },
+    {
+      prop: "chdir",
+      target: process,
+      violationType: "process_chdir",
+      strategy: "throw",
+      reason: "process.chdir could confuse the interpreter's CWD tracking"
+    },
+    // Diagnostic report (leaks full environment, host paths, system info)
+    {
+      prop: "report",
+      target: process,
+      violationType: "process_report",
+      strategy: "throw",
+      reason: "process.report could disclose full environment, host paths, and system info"
+    },
+    // Environment file loading (Node 21.7+)
+    {
+      prop: "loadEnvFile",
+      target: process,
+      violationType: "process_env",
+      strategy: "throw",
+      reason: "process.loadEnvFile could load env files bypassing env proxy"
+    },
+    // Exception handler manipulation
+    {
+      prop: "setUncaughtExceptionCaptureCallback",
+      target: process,
+      violationType: "process_exception_handler",
+      strategy: "throw",
+      reason: "setUncaughtExceptionCaptureCallback could intercept security errors"
+    },
+    // IPC communication vectors (may be undefined in non-IPC contexts)
+    {
+      prop: "send",
+      target: process,
+      violationType: "process_send",
+      strategy: "throw",
+      reason: "process.send could communicate with parent process in IPC contexts"
+    },
+    {
+      prop: "channel",
+      target: process,
+      violationType: "process_channel",
+      strategy: "throw",
+      reason: "process.channel could access IPC channel to parent process"
+    },
+    // Timing side-channel vectors
+    {
+      prop: "cpuUsage",
+      target: process,
+      violationType: "process_timing",
+      strategy: "throw",
+      reason: "process.cpuUsage could enable timing side-channel attacks"
+    },
+    {
+      prop: "memoryUsage",
+      target: process,
+      violationType: "process_timing",
+      strategy: "throw",
+      reason: "process.memoryUsage could enable timing side-channel attacks"
+    },
+    {
+      prop: "hrtime",
+      target: process,
+      violationType: "process_timing",
+      strategy: "throw",
+      reason: "process.hrtime could enable timing side-channel attacks"
+    },
     // We also don't block `require` because:
     // 1. It may not exist in all environments (ESM)
     // 2. import() is the modern escape vector and can't be blocked this way
@@ -107,6 +302,13 @@ function getBlockedGlobals() {
       reason: "FinalizationRegistry could be used to leak references outside sandbox"
     },
     // Introspection/interception vectors (freeze instead of throw)
+    // SECURITY RATIONALE: Reflect is frozen (not blocked) because:
+    // 1. Defense infrastructure uses Reflect.apply/get/set/construct internally
+    // 2. Frozen Reflect cannot be mutated but remains fully functional
+    // 3. Reflect.construct(Function, ['code']) IS safe because globalThis.Function
+    //    is replaced with a blocking proxy — Reflect.construct receives the proxy
+    // 4. Security depends on NEVER leaking original Function/eval references.
+    //    If an unpatched Function ref leaked, Reflect.construct would bypass defense.
     {
       prop: "Reflect",
       target: globalThis,
@@ -143,9 +345,80 @@ function getBlockedGlobals() {
       violationType: "atomics",
       strategy: "throw",
       reason: "Atomics could enable side-channel communication or timing attacks"
-    }
+    },
     // Note: Error.prepareStackTrace is handled specially in defense-in-depth-box.ts
     // because we only want to block SETTING it, not reading (V8 reads it internally)
+    // Timing side-channel: performance.now() provides sub-millisecond resolution
+    // Note: Date.now() is intentionally NOT blocked — it's used for $SECONDS,
+    // date command, and has only ~1ms resolution (vs process.hrtime at ns).
+    {
+      prop: "performance",
+      target: globalThis,
+      violationType: "performance_timing",
+      strategy: "throw",
+      reason: "performance.now() provides sub-millisecond timing for side-channel attacks"
+    },
+    // Block direct access to process.stdout and process.stderr to prevent
+    // writing to the host's actual stdout/stderr, bypassing the interpreter's
+    // output accumulation.
+    {
+      prop: "stdout",
+      target: process,
+      violationType: "process_stdout",
+      strategy: "throw",
+      reason: "process.stdout could bypass interpreter output to write to host stdout"
+    },
+    {
+      prop: "stderr",
+      target: process,
+      violationType: "process_stderr",
+      strategy: "throw",
+      reason: "process.stderr could bypass interpreter output to write to host stderr"
+    },
+    // Prototype pollution vectors
+    {
+      prop: "__defineGetter__",
+      target: Object.prototype,
+      violationType: "prototype_mutation",
+      strategy: "throw",
+      reason: "__defineGetter__ allows prototype pollution via getter injection"
+    },
+    {
+      prop: "__defineSetter__",
+      target: Object.prototype,
+      violationType: "prototype_mutation",
+      strategy: "throw",
+      reason: "__defineSetter__ allows prototype pollution via setter injection"
+    },
+    {
+      prop: "__lookupGetter__",
+      target: Object.prototype,
+      violationType: "prototype_mutation",
+      strategy: "throw",
+      reason: "__lookupGetter__ enables introspection for prototype pollution attacks"
+    },
+    {
+      prop: "__lookupSetter__",
+      target: Object.prototype,
+      violationType: "prototype_mutation",
+      strategy: "throw",
+      reason: "__lookupSetter__ enables introspection for prototype pollution attacks"
+    },
+    // Freeze JSON and Math to prevent mutation of built-in utility objects
+    {
+      prop: "JSON",
+      target: globalThis,
+      violationType: "json_mutation",
+      strategy: "freeze",
+      reason: "Freeze JSON to prevent mutation of parsing/serialization"
+    },
+    {
+      prop: "Math",
+      target: globalThis,
+      violationType: "math_mutation",
+      strategy: "freeze",
+      reason: "Freeze Math to prevent mutation of math utilities"
+    }
   ];
   try {
     const AsyncFunction = Object.getPrototypeOf(async () => {
@@ -211,15 +484,9 @@ var IS_BROWSER = typeof __BROWSER__ !== "undefined" && __BROWSER__;
 var AsyncLocalStorageClass = null;
 if (!IS_BROWSER) {
   try {
-    const { createRequire } = await import("node:module");
-    const require2 = createRequire(import.meta.url);
-    const asyncHooks = require2("node:async_hooks");
-    AsyncLocalStorageClass = asyncHooks.AsyncLocalStorage;
-  } catch (e) {
-    console.debug(
-      "[DefenseInDepthBox] AsyncLocalStorage not available, defense-in-depth disabled:",
-      e instanceof Error ? e.message : e
-    );
+    const { AsyncLocalStorage } = __require("node:async_hooks");
+    AsyncLocalStorageClass = AsyncLocalStorage;
+  } catch {
   }
 }
 var executionContext = !IS_BROWSER && AsyncLocalStorageClass ? new AsyncLocalStorageClass() : null;
@@ -395,12 +662,15 @@ var WorkerDefenseInDepth = class {
   /**
    * Create a blocking proxy for an object (blocks all property access).
    */
-  createBlockingObjectProxy(original, path, violationType) {
+  createBlockingObjectProxy(original, path, violationType, allowedKeys) {
     const self = this;
     const auditMode = this.config.auditMode;
     return new this.originalProxy(original, {
       get(target, prop, receiver) {
         if (self.inTrap) {
+          return Reflect.get(target, prop, receiver);
+        }
+        if (allowedKeys && typeof prop === "string" && allowedKeys.has(prop)) {
           return Reflect.get(target, prop, receiver);
         }
         self.inTrap = true;
@@ -498,6 +768,64 @@ var WorkerDefenseInDepth = class {
         } finally {
           self.inTrap = false;
         }
+      },
+      deleteProperty(target, prop) {
+        if (self.inTrap) {
+          return Reflect.deleteProperty(target, prop);
+        }
+        self.inTrap = true;
+        try {
+          const fullPath = `${path}.${String(prop)}`;
+          const message = `${fullPath} deletion is blocked in worker context`;
+          const violation = self.recordViolation(
+            violationType,
+            fullPath,
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return Reflect.deleteProperty(target, prop);
+        } finally {
+          self.inTrap = false;
+        }
+      },
+      setPrototypeOf(target, proto) {
+        if (self.inTrap) {
+          return Reflect.setPrototypeOf(target, proto);
+        }
+        self.inTrap = true;
+        try {
+          const message = `${path} setPrototypeOf is blocked in worker context`;
+          const violation = self.recordViolation(violationType, path, message);
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return Reflect.setPrototypeOf(target, proto);
+        } finally {
+          self.inTrap = false;
+        }
+      },
+      defineProperty(target, prop, descriptor) {
+        if (self.inTrap) {
+          return Reflect.defineProperty(target, prop, descriptor);
+        }
+        self.inTrap = true;
+        try {
+          const fullPath = `${path}.${String(prop)}`;
+          const message = `${fullPath} defineProperty is blocked in worker context`;
+          const violation = self.recordViolation(
+            violationType,
+            fullPath,
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return Reflect.defineProperty(target, prop, descriptor);
+        } finally {
+          self.inTrap = false;
+        }
       }
     });
   }
@@ -522,8 +850,134 @@ var WorkerDefenseInDepth = class {
     if (!excludeTypes.has("module_load")) {
       this.protectModuleLoad();
     }
+    if (!excludeTypes.has("module_resolve_filename")) {
+      this.protectModuleResolveFilename();
+    }
     if (!excludeTypes.has("process_main_module")) {
       this.protectProcessMainModule();
+    }
+    if (!excludeTypes.has("process_exec_path")) {
+      this.protectProcessExecPath();
+    }
+    if (!excludeTypes.has("process_connected")) {
+      this.protectProcessConnected();
+    }
+    this.lockWellKnownSymbols();
+    if (!excludeTypes.has("proxy")) {
+      this.protectProxyRevocable();
+    }
+  }
+  /**
+   * Lock well-known Symbol properties on built-in constructors/prototypes.
+   */
+  lockWellKnownSymbols() {
+    const lock = (obj, sym) => {
+      try {
+        const desc = Object.getOwnPropertyDescriptor(obj, sym);
+        if (desc?.configurable) {
+          if ("value" in desc) {
+            Object.defineProperty(obj, sym, {
+              ...desc,
+              configurable: false,
+              writable: false
+            });
+            return;
+          }
+          Object.defineProperty(obj, sym, { ...desc, configurable: false });
+        }
+      } catch {
+      }
+    };
+    for (const ctor of [Array, Map, Set, RegExp, Promise]) {
+      lock(ctor, Symbol.species);
+    }
+    for (const proto of [
+      Array.prototype,
+      String.prototype,
+      Map.prototype,
+      Set.prototype
+    ]) {
+      lock(proto, Symbol.iterator);
+    }
+    lock(Symbol.prototype, Symbol.toPrimitive);
+    lock(Date.prototype, Symbol.toPrimitive);
+    for (const sym of [
+      Symbol.match,
+      Symbol.matchAll,
+      Symbol.replace,
+      Symbol.search,
+      Symbol.split
+    ]) {
+      lock(RegExp.prototype, sym);
+    }
+    lock(Function.prototype, Symbol.hasInstance);
+    lock(Array.prototype, Symbol.unscopables);
+    for (const proto of [
+      Map.prototype,
+      Set.prototype,
+      Promise.prototype,
+      ArrayBuffer.prototype
+    ]) {
+      lock(proto, Symbol.toStringTag);
+    }
+    try {
+      const stackDesc = Object.getOwnPropertyDescriptor(
+        Error,
+        "stackTraceLimit"
+      );
+      this.originalDescriptors.push({
+        target: Error,
+        prop: "stackTraceLimit",
+        descriptor: stackDesc
+      });
+      Object.defineProperty(Error, "stackTraceLimit", {
+        value: Error.stackTraceLimit,
+        writable: false,
+        configurable: true
+      });
+    } catch {
+    }
+  }
+  /**
+   * Block Proxy.revocable to prevent bypassing Proxy constructor blocking.
+   *
+   * Proxy.revocable internally uses the real Proxy constructor, so it bypasses
+   * our blocking proxy on globalThis.Proxy. We replace it with a wrapper that
+   * always blocks in worker context.
+   */
+  protectProxyRevocable() {
+    const self = this;
+    const auditMode = this.config.auditMode;
+    try {
+      const originalRevocable = this.originalProxy.revocable;
+      if (typeof originalRevocable !== "function") return;
+      const descriptor = Object.getOwnPropertyDescriptor(
+        this.originalProxy,
+        "revocable"
+      );
+      this.originalDescriptors.push({
+        target: this.originalProxy,
+        prop: "revocable",
+        descriptor
+      });
+      Object.defineProperty(this.originalProxy, "revocable", {
+        value: function revocable(_target, _handler) {
+          const message = "Proxy.revocable is blocked in worker context";
+          const violation = self.recordViolation(
+            "proxy",
+            "Proxy.revocable",
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return originalRevocable(_target, _handler);
+        },
+        writable: false,
+        configurable: true
+        // Must be configurable for restoration
+      });
+    } catch {
     }
   }
   /**
@@ -763,6 +1217,121 @@ var WorkerDefenseInDepth = class {
     }
   }
   /**
+   * Protect process.execPath from being read or set in worker context.
+   *
+   * process.execPath is a string primitive (not an object), so it cannot be
+   * proxied via the normal blocked globals mechanism. We use Object.defineProperty
+   * with getter/setter (same pattern as protectProcessMainModule).
+   */
+  protectProcessExecPath() {
+    if (typeof process === "undefined") return;
+    const self = this;
+    const auditMode = this.config.auditMode;
+    try {
+      const originalDescriptor = Object.getOwnPropertyDescriptor(
+        process,
+        "execPath"
+      );
+      this.originalDescriptors.push({
+        target: process,
+        prop: "execPath",
+        descriptor: originalDescriptor
+      });
+      const currentValue = originalDescriptor?.value ?? process.execPath;
+      Object.defineProperty(process, "execPath", {
+        get() {
+          const message = "process.execPath access is blocked in worker context";
+          const violation = self.recordViolation(
+            "process_exec_path",
+            "process.execPath",
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return currentValue;
+        },
+        set(value) {
+          const message = "process.execPath modification is blocked in worker context";
+          const violation = self.recordViolation(
+            "process_exec_path",
+            "process.execPath",
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          Object.defineProperty(process, "execPath", {
+            value,
+            writable: true,
+            configurable: true
+          });
+        },
+        configurable: true
+      });
+    } catch {
+    }
+  }
+  /**
+   * Protect process.connected from being read or set in worker context.
+   *
+   * process.connected is a boolean primitive (not an object), so it cannot be
+   * proxied via the normal blocked globals mechanism. We use Object.defineProperty
+   * with getter/setter (same pattern as protectProcessExecPath).
+   *
+   * Only protects if process.connected exists (IPC contexts).
+   */
+  protectProcessConnected() {
+    if (typeof process === "undefined") return;
+    if (process.connected === void 0) return;
+    const self = this;
+    const auditMode = this.config.auditMode;
+    try {
+      const originalDescriptor = Object.getOwnPropertyDescriptor(
+        process,
+        "connected"
+      );
+      this.originalDescriptors.push({
+        target: process,
+        prop: "connected",
+        descriptor: originalDescriptor
+      });
+      const currentValue = originalDescriptor?.value ?? process.connected;
+      Object.defineProperty(process, "connected", {
+        get() {
+          const message = "process.connected access is blocked in worker context";
+          const violation = self.recordViolation(
+            "process_connected",
+            "process.connected",
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return currentValue;
+        },
+        set(value) {
+          const message = "process.connected modification is blocked in worker context";
+          const violation = self.recordViolation(
+            "process_connected",
+            "process.connected",
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          Object.defineProperty(process, "connected", {
+            value,
+            writable: true,
+            configurable: true
+          });
+        },
+        configurable: true
+      });
+    } catch {
+    }
+  }
+  /**
    * Protect Module._load from being called.
    *
    * The attack vector is:
@@ -817,6 +1386,65 @@ var WorkerDefenseInDepth = class {
     }
   }
   /**
+   * Protect Module._resolveFilename from being called in worker context.
+   *
+   * Module._resolveFilename is called for both require() and import() resolution.
+   * Blocking it catches file-based import() specifiers.
+   *
+   * data: and blob: URLs are handled by ESM loader hooks registered
+   * in the main thread (DefenseInDepthBox.protectDynamicImport).
+   */
+  protectModuleResolveFilename() {
+    const self = this;
+    const auditMode = this.config.auditMode;
+    try {
+      let ModuleClass = null;
+      if (typeof process !== "undefined") {
+        const mainModule = process.mainModule;
+        if (mainModule && typeof mainModule === "object") {
+          ModuleClass = mainModule.constructor;
+        }
+      }
+      if (!ModuleClass && typeof __require !== "undefined" && typeof __require.main !== "undefined") {
+        ModuleClass = __require.main.constructor;
+      }
+      if (!ModuleClass || typeof ModuleClass._resolveFilename !== "function") {
+        return;
+      }
+      const original = ModuleClass._resolveFilename;
+      const descriptor = Object.getOwnPropertyDescriptor(
+        ModuleClass,
+        "_resolveFilename"
+      );
+      this.originalDescriptors.push({
+        target: ModuleClass,
+        prop: "_resolveFilename",
+        descriptor
+      });
+      const path = "Module._resolveFilename";
+      const proxy = new this.originalProxy(original, {
+        apply(_target, _thisArg, _args) {
+          const message = `${path} is blocked in worker context`;
+          const violation = self.recordViolation(
+            "module_resolve_filename",
+            path,
+            message
+          );
+          if (!auditMode) {
+            throw new WorkerSecurityViolationError(message, violation);
+          }
+          return Reflect.apply(_target, _thisArg, _args);
+        }
+      });
+      Object.defineProperty(ModuleClass, "_resolveFilename", {
+        value: proxy,
+        writable: true,
+        configurable: true
+      });
+    } catch {
+    }
+  }
+  /**
    * Apply a single patch to a blocked global.
    */
   applyPatch(blocked) {
@@ -841,7 +1469,8 @@ var WorkerDefenseInDepth = class {
         ) : this.createBlockingObjectProxy(
           original,
           path,
-          violationType
+          violationType,
+          blocked.allowedKeys
         );
         Object.defineProperty(target, prop, {
           value: proxy,
@@ -870,6 +1499,11 @@ var WorkerDefenseInDepth = class {
     this.originalDescriptors = [];
   }
 };
+
+// src/security/trusted-globals.ts
+var _SharedArrayBuffer = globalThis.SharedArrayBuffer;
+var _Atomics = globalThis.Atomics;
+var _performanceNow = performance.now.bind(performance);
 
 // src/commands/worker-bridge/protocol.ts
 var OpCode = {
@@ -963,52 +1597,55 @@ var ProtocolBuffer = class {
     this.dataView = new DataView(buffer);
   }
   getOpCode() {
-    return Atomics.load(this.int32View, Offset.OP_CODE / 4);
+    return _Atomics.load(this.int32View, Offset.OP_CODE / 4);
   }
   setOpCode(code) {
-    Atomics.store(this.int32View, Offset.OP_CODE / 4, code);
+    _Atomics.store(this.int32View, Offset.OP_CODE / 4, code);
   }
   getStatus() {
-    return Atomics.load(this.int32View, Offset.STATUS / 4);
+    return _Atomics.load(this.int32View, Offset.STATUS / 4);
   }
   setStatus(status) {
-    Atomics.store(this.int32View, Offset.STATUS / 4, status);
+    _Atomics.store(this.int32View, Offset.STATUS / 4, status);
   }
   getPathLength() {
-    return Atomics.load(this.int32View, Offset.PATH_LENGTH / 4);
+    return _Atomics.load(this.int32View, Offset.PATH_LENGTH / 4);
   }
   setPathLength(length) {
-    Atomics.store(this.int32View, Offset.PATH_LENGTH / 4, length);
+    _Atomics.store(this.int32View, Offset.PATH_LENGTH / 4, length);
   }
   getDataLength() {
-    return Atomics.load(this.int32View, Offset.DATA_LENGTH / 4);
+    return _Atomics.load(this.int32View, Offset.DATA_LENGTH / 4);
   }
   setDataLength(length) {
-    Atomics.store(this.int32View, Offset.DATA_LENGTH / 4, length);
+    _Atomics.store(this.int32View, Offset.DATA_LENGTH / 4, length);
   }
   getResultLength() {
-    return Atomics.load(this.int32View, Offset.RESULT_LENGTH / 4);
+    return _Atomics.load(this.int32View, Offset.RESULT_LENGTH / 4);
   }
   setResultLength(length) {
-    Atomics.store(this.int32View, Offset.RESULT_LENGTH / 4, length);
+    _Atomics.store(this.int32View, Offset.RESULT_LENGTH / 4, length);
   }
   getErrorCode() {
-    return Atomics.load(this.int32View, Offset.ERROR_CODE / 4);
+    return _Atomics.load(
+      this.int32View,
+      Offset.ERROR_CODE / 4
+    );
   }
   setErrorCode(code) {
-    Atomics.store(this.int32View, Offset.ERROR_CODE / 4, code);
+    _Atomics.store(this.int32View, Offset.ERROR_CODE / 4, code);
   }
   getFlags() {
-    return Atomics.load(this.int32View, Offset.FLAGS / 4);
+    return _Atomics.load(this.int32View, Offset.FLAGS / 4);
   }
   setFlags(flags) {
-    Atomics.store(this.int32View, Offset.FLAGS / 4, flags);
+    _Atomics.store(this.int32View, Offset.FLAGS / 4, flags);
   }
   getMode() {
-    return Atomics.load(this.int32View, Offset.MODE / 4);
+    return _Atomics.load(this.int32View, Offset.MODE / 4);
   }
   setMode(mode) {
-    Atomics.store(this.int32View, Offset.MODE / 4, mode);
+    _Atomics.store(this.int32View, Offset.MODE / 4, mode);
   }
   getPath() {
     const length = this.getPathLength();
@@ -1104,7 +1741,7 @@ var ProtocolBuffer = class {
     };
   }
   waitForReady(timeout) {
-    return Atomics.wait(
+    return _Atomics.wait(
       this.int32View,
       Offset.STATUS / 4,
       Status.PENDING,
@@ -1112,7 +1749,7 @@ var ProtocolBuffer = class {
     );
   }
   waitForReadyAsync(timeout) {
-    return Atomics.waitAsync(
+    return _Atomics.waitAsync(
       this.int32View,
       Offset.STATUS / 4,
       Status.PENDING,
@@ -1135,7 +1772,7 @@ var ProtocolBuffer = class {
         return false;
       }
       const remainingMs = timeout - elapsed;
-      const result = Atomics.waitAsync(
+      const result = _Atomics.waitAsync(
         this.int32View,
         Offset.STATUS / 4,
         status,
@@ -1150,7 +1787,7 @@ var ProtocolBuffer = class {
     }
   }
   waitForResult(timeout) {
-    return Atomics.wait(
+    return _Atomics.wait(
       this.int32View,
       Offset.STATUS / 4,
       Status.READY,
@@ -1158,7 +1795,7 @@ var ProtocolBuffer = class {
     );
   }
   notify() {
-    return Atomics.notify(this.int32View, Offset.STATUS / 4);
+    return _Atomics.notify(this.int32View, Offset.STATUS / 4);
   }
   reset() {
     this.setOpCode(OpCode.NOOP);
@@ -1175,8 +1812,10 @@ var ProtocolBuffer = class {
 // src/commands/worker-bridge/sync-backend.ts
 var SyncBackend = class {
   protocol;
-  constructor(sharedBuffer) {
+  operationTimeoutMs;
+  constructor(sharedBuffer, operationTimeoutMs = 3e4) {
     this.protocol = new ProtocolBuffer(sharedBuffer);
+    this.operationTimeoutMs = operationTimeoutMs;
   }
   execSync(opCode, path, data, flags = 0, mode = 0) {
     this.protocol.reset();
@@ -1189,7 +1828,7 @@ var SyncBackend = class {
     }
     this.protocol.setStatus(Status.READY);
     this.protocol.notify();
-    const waitResult = this.protocol.waitForResult(5e3);
+    const waitResult = this.protocol.waitForResult(this.operationTimeoutMs);
     if (waitResult === "timed-out") {
       return { success: false, error: "Operation timed out" };
     }
@@ -1308,11 +1947,17 @@ var SyncBackend = class {
   }
   writeStdout(data) {
     const encoded = new TextEncoder().encode(data);
-    this.execSync(OpCode.WRITE_STDOUT, "", encoded);
+    const result = this.execSync(OpCode.WRITE_STDOUT, "", encoded);
+    if (!result.success) {
+      throw new Error(result.error || "Failed to write stdout");
+    }
   }
   writeStderr(data) {
     const encoded = new TextEncoder().encode(data);
-    this.execSync(OpCode.WRITE_STDERR, "", encoded);
+    const result = this.execSync(OpCode.WRITE_STDERR, "", encoded);
+    if (!result.success) {
+      throw new Error(result.error || "Failed to write stderr");
+    }
   }
   exit(code) {
     this.execSync(OpCode.EXIT, "", void 0, code);
@@ -2169,8 +2814,12 @@ function setupContext(context, backend, input) {
       const val = context.dump(a);
       return typeof val === "string" ? val : JSON.stringify(val);
     });
-    backend.writeStdout(`${parts.join(" ")}
+    try {
+      backend.writeStdout(`${parts.join(" ")}
 `);
+    } catch (e) {
+      return throwError(context, e.message || "write failed");
+    }
     return context.undefined;
   });
   context.setProp(consoleObj, "log", logFn);
@@ -2180,8 +2829,12 @@ function setupContext(context, backend, input) {
       const val = context.dump(a);
       return typeof val === "string" ? val : JSON.stringify(val);
     });
-    backend.writeStderr(`${parts.join(" ")}
+    try {
+      backend.writeStderr(`${parts.join(" ")}
 `);
+    } catch (e) {
+      return throwError(context, e.message || "write failed");
+    }
     return context.undefined;
   });
   context.setProp(consoleObj, "error", errorFn);
@@ -2191,8 +2844,12 @@ function setupContext(context, backend, input) {
       const val = context.dump(a);
       return typeof val === "string" ? val : JSON.stringify(val);
     });
-    backend.writeStderr(`${parts.join(" ")}
+    try {
+      backend.writeStderr(`${parts.join(" ")}
 `);
+    } catch (e) {
+      return throwError(context, e.message || "write failed");
+    }
     return context.undefined;
   });
   context.setProp(consoleObj, "warn", warnFn);
@@ -2664,6 +3321,10 @@ function setupContext(context, backend, input) {
     compatResult.value.dispose();
   }
 }
+var originalProcessExit = process.exit.bind(process);
+process.on("uncaughtException", () => {
+  originalProcessExit(1);
+});
 var defense = null;
 async function initializeWithDefense() {
   await getQuickJSModule();
@@ -2673,12 +3334,22 @@ async function initializeWithDefense() {
   }
   await new Promise((r) => setTimeout(r, 0));
   defense = new WorkerDefenseInDepth({
-    excludeViolationTypes: ["shared_array_buffer", "atomics"]
+    excludeViolationTypes: [
+      // SharedArrayBuffer/Atomics: Used by sync-backend for synchronous
+      // filesystem communication between the worker and main thread.
+      "shared_array_buffer",
+      "atomics",
+      // process.stdout/stderr: Emscripten (quickjs-emscripten) routes WASM
+      // stdout/stderr through Node.js console which uses process.stdout/stderr.
+      // User code runs inside QuickJS with no access to Node.js process.
+      "process_stdout",
+      "process_stderr"
+    ]
   });
 }
 async function executeCode(input) {
   const qjs = await getQuickJSModule();
-  const backend = new SyncBackend(input.sharedBuffer);
+  const backend = new SyncBackend(input.sharedBuffer, input.timeoutMs);
   let runtime;
   let context;
   try {
@@ -2755,8 +3426,11 @@ async function executeCode(input) {
         return { success: true };
       }
       const errorMsg = formatError(errorVal);
-      backend.writeStderr(`${errorMsg}
+      try {
+        backend.writeStderr(`${errorMsg}
 `);
+      } catch {
+      }
       backend.exit(1);
       return { success: true };
     }
@@ -2768,8 +3442,11 @@ async function executeCode(input) {
         const rawPendingMsg = typeof errorVal === "object" && errorVal !== null && "message" in errorVal ? errorVal.message : String(errorVal);
         if (rawPendingMsg !== "__EXIT__") {
           const errorMsg = formatError(errorVal);
-          backend.writeStderr(`${errorMsg}
+          try {
+            backend.writeStderr(`${errorMsg}
 `);
+          } catch {
+          }
           backend.exit(1);
           return { success: true };
         }
@@ -2787,6 +3464,9 @@ async function executeCode(input) {
     try {
       backend.writeStderr(`js-exec: ${message}
 `);
+    } catch {
+    }
+    try {
       backend.exit(1);
     } catch {
       return { success: false, error: message };
@@ -2797,8 +3477,7 @@ async function executeCode(input) {
     runtime?.dispose();
   }
 }
-initializeWithDefense().then(async () => {
-}).catch((e) => {
+var initPromise = initializeWithDefense().catch((e) => {
   parentPort?.postMessage({
     success: false,
     error: e.message,
@@ -2807,9 +3486,7 @@ initializeWithDefense().then(async () => {
 });
 parentPort?.on("message", async (input) => {
   try {
-    if (!defense) {
-      await initializeWithDefense();
-    }
+    await initPromise;
     const result = await executeCode(input);
     result.defenseStats = defense?.getStats();
     parentPort?.postMessage(result);

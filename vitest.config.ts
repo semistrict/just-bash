@@ -37,6 +37,7 @@ export default defineConfig({
       ["forks", "**/python3.stdlib.test.ts"],
       ["forks", "**/python-scripting.test.ts"],
       ["forks", "**/sqlite3.worker-protocol-abuse.test.ts"],
+      ["forks", "**/js-exec*.test.ts"],
     ],
     coverage: {
       provider: "v8",

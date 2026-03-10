@@ -230,6 +230,21 @@ describe("js-exec", () => {
     });
   });
 
+  describe("output size limit", () => {
+    it("should enforce maxOutputSize", { timeout: 30000 }, async () => {
+      const env = new Bash({
+        javascript: true,
+        executionLimits: { maxOutputSize: 500 },
+      });
+      const result = await env.exec(
+        `js-exec -c "console.log('x'.repeat(1000))"`,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("total output size exceeded");
+      expect(result.stderr).toContain("js-exec:");
+    });
+  });
+
   describe("bootstrap code", () => {
     it("should run bootstrap code before user code", async () => {
       const env = new Bash({

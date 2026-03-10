@@ -18,9 +18,11 @@ import {
  */
 export class SyncBackend {
   private protocol: ProtocolBuffer;
+  private operationTimeoutMs: number;
 
-  constructor(sharedBuffer: SharedArrayBuffer) {
+  constructor(sharedBuffer: SharedArrayBuffer, operationTimeoutMs = 30000) {
     this.protocol = new ProtocolBuffer(sharedBuffer);
+    this.operationTimeoutMs = operationTimeoutMs;
   }
 
   private execSync(
@@ -43,7 +45,7 @@ export class SyncBackend {
     this.protocol.notify();
 
     // Wait for main thread to process (with timeout)
-    const waitResult = this.protocol.waitForResult(5000);
+    const waitResult = this.protocol.waitForResult(this.operationTimeoutMs);
     if (waitResult === "timed-out") {
       return { success: false, error: "Operation timed out" };
     }

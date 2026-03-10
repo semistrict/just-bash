@@ -22,7 +22,7 @@ import {
   sanitizeUnknownError,
   wrapWasmCallback,
 } from "../../security/wasm-callback.js";
-import { SyncFsBackend } from "./sync-fs-backend.js";
+import { SyncBackend } from "../worker-bridge/sync-backend.js";
 
 export interface WorkerInput {
   protocolToken: string;
@@ -32,6 +32,7 @@ export interface WorkerInput {
   env: Record<string, string>;
   args: string[];
   scriptPath?: string;
+  timeoutMs?: number;
 }
 
 export interface WorkerOutput {
@@ -155,7 +156,7 @@ interface EmscriptenModule {
 
 /**
  * Create a HOSTFS backend that bridges to just-bash's filesystem.
- * This follows the Emscripten NODEFS pattern but uses SyncFsBackend.
+ * This follows the Emscripten NODEFS pattern but uses SyncBackend.
  */
 
 // Emscripten FS type definitions (based on Emscripten's internal structures)
@@ -930,7 +931,7 @@ os.chdir('/host' + ${JSON.stringify(input.cwd)})
  * which triggers backend.httpRequest() synchronously and stores the response.
  * Python then reads the response from the same file.
  */
-function createHTTPFS(backend: SyncFsBackend, FS: EmscriptenFS) {
+function createHTTPFS(backend: SyncBackend, FS: EmscriptenFS) {
   // Stores the last HTTP response for read-back
   let lastResponse: Uint8Array | null = null;
   const encoder = new TextEncoder();
@@ -1216,7 +1217,7 @@ async function runPython(input: WorkerInput): Promise<WorkerOutput> {
     };
   }
 
-  const backend = new SyncFsBackend(input.sharedBuffer);
+  const backend = new SyncBackend(input.sharedBuffer, input.timeoutMs);
 
   // Load the CPython Emscripten factory function
   assertApprovedPath(cpythonEntryPath, "cpython-entry");

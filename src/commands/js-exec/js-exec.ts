@@ -7,10 +7,18 @@
  * This command is Node.js only (uses worker_threads).
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { mapToRecord } from "../../helpers/env.js";
-import type { Command, CommandContext, ExecResult } from "../../types.js";
+import { DefenseInDepthBox } from "../../security/defense-in-depth-box.js";
+import { _clearTimeout, _setTimeout } from "../../timers.js";
+import type {
+  Command,
+  CommandContext,
+  CommandExecOptions,
+  ExecResult,
+} from "../../types.js";
 import { hasHelpFlag } from "../help.js";
 import { BridgeHandler } from "../worker-bridge/bridge-handler.js";
 import { createSharedBuffer } from "../worker-bridge/protocol.js";
@@ -18,6 +26,13 @@ import type { JsExecWorkerInput, JsExecWorkerOutput } from "./worker.js";
 
 /** Default JavaScript execution timeout in milliseconds */
 const DEFAULT_JS_TIMEOUT_MS = 30000;
+
+/**
+ * Tracks js-exec execution context via AsyncLocalStorage.
+ * When a js-exec bridge exec callback triggers another js-exec,
+ * this detects the re-entrance without rejecting legitimate concurrent calls.
+ */
+const jsExecAsyncContext = new AsyncLocalStorage<boolean>();
 
 const JS_EXEC_HELP = `js-exec - Sandboxed JavaScript/TypeScript runtime with Node.js-compatible APIs
 
@@ -191,7 +206,7 @@ function processNextExecution(): void {
 function getOrCreateWorker(): Worker {
   // Clear any pending idle timeout
   if (workerIdleTimeout) {
-    clearTimeout(workerIdleTimeout);
+    _clearTimeout(workerIdleTimeout);
     workerIdleTimeout = null;
   }
 
@@ -199,7 +214,7 @@ function getOrCreateWorker(): Worker {
     return sharedWorker;
   }
 
-  sharedWorker = new Worker(workerPath);
+  sharedWorker = DefenseInDepthBox.runTrusted(() => new Worker(workerPath));
 
   sharedWorker.on("message", (result: JsExecWorkerOutput) => {
     if (currentExecution) {
@@ -236,7 +251,7 @@ function getOrCreateWorker(): Worker {
 
 function scheduleWorkerTermination(): void {
   // Terminate worker after 5 seconds of inactivity
-  workerIdleTimeout = setTimeout(() => {
+  workerIdleTimeout = _setTimeout(() => {
     if (sharedWorker && !currentExecution && executionQueue.length === 0) {
       sharedWorker.terminate();
       sharedWorker = null;
@@ -256,14 +271,52 @@ async function executeJS(
   isModule?: boolean,
   stripTypes?: boolean,
 ): Promise<ExecResult> {
+  if (jsExecAsyncContext.getStore()) {
+    return {
+      stdout: "",
+      stderr: "js-exec: recursive invocation is not supported\n",
+      exitCode: 1,
+    };
+  }
+  return executeJSInner(
+    jsCode,
+    ctx,
+    scriptPath,
+    scriptArgs,
+    bootstrapCode,
+    isModule,
+    stripTypes,
+  );
+}
+
+async function executeJSInner(
+  jsCode: string,
+  ctx: CommandContext,
+  scriptPath?: string,
+  scriptArgs: string[] = [],
+  bootstrapCode?: string,
+  isModule?: boolean,
+  stripTypes?: boolean,
+): Promise<ExecResult> {
   const sharedBuffer = createSharedBuffer();
+
+  // Wrap ctx.exec to set AsyncLocalStorage context for re-entrant detection.
+  // When js-exec's bridge calls exec (child_process.execSync), any nested
+  // js-exec call will see the context and fail fast instead of deadlocking.
+  const execFn = ctx.exec;
+  const wrappedExec: typeof ctx.exec = execFn
+    ? (command: string, options: CommandExecOptions) =>
+        jsExecAsyncContext.run(true, () => execFn(command, options))
+    : undefined;
+
   const bridgeHandler = new BridgeHandler(
     sharedBuffer,
     ctx.fs,
     ctx.cwd,
     "js-exec",
     ctx.fetch,
-    ctx.exec,
+    ctx.limits?.maxOutputSize ?? 0,
+    wrappedExec,
   );
 
   const timeoutMs = ctx.limits?.maxJsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS;
@@ -278,25 +331,30 @@ async function executeJS(
     bootstrapCode,
     isModule,
     stripTypes,
+    timeoutMs,
   };
 
+  // Use deferred pattern to keep queue management outside the Promise constructor
+  let resolveWorker!: (result: JsExecWorkerOutput) => void;
   const workerPromise = new Promise<JsExecWorkerOutput>((resolve) => {
-    const timeout = setTimeout(() => {
-      resolve({
-        success: false,
-        error: `Execution timeout: exceeded ${timeoutMs}ms limit`,
-      });
-    }, timeoutMs);
-
-    const wrappedResolve = (result: JsExecWorkerOutput) => {
-      clearTimeout(timeout);
-      resolve(result);
-    };
-
-    // Queue the execution (serialized since QuickJS is single-threaded)
-    executionQueue.push({ input: workerInput, resolve: wrappedResolve });
-    processNextExecution();
+    resolveWorker = resolve;
   });
+
+  const timeoutHandle = _setTimeout(() => {
+    resolveWorker({
+      success: false,
+      error: `Execution timeout: exceeded ${timeoutMs}ms limit`,
+    });
+  }, timeoutMs);
+
+  const wrappedResolve = (result: JsExecWorkerOutput) => {
+    _clearTimeout(timeoutHandle);
+    resolveWorker(result);
+  };
+
+  // Queue the execution (serialized since QuickJS is single-threaded)
+  executionQueue.push({ input: workerInput, resolve: wrappedResolve });
+  processNextExecution();
 
   const [bridgeOutput, workerResult] = await Promise.all([
     bridgeHandler.run(timeoutMs),

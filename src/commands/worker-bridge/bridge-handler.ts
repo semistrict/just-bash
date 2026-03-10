@@ -8,6 +8,7 @@
 import type { IFileSystem } from "../../fs/interface.js";
 import { sanitizeErrorMessage } from "../../fs/real-fs-utils.js";
 import type { SecureFetch } from "../../network/fetch.js";
+import { _clearTimeout, _setTimeout } from "../../timers.js";
 import type { CommandExecOptions, ExecResult } from "../../types.js";
 import {
   ErrorCode,
@@ -33,6 +34,8 @@ export class BridgeHandler {
   private running = false;
   private output: BridgeOutput = { stdout: "", stderr: "", exitCode: 0 };
   private outputLimitExceeded = false;
+  private startTime = 0;
+  private timeoutMs = 0;
 
   constructor(
     sharedBuffer: SharedArrayBuffer,
@@ -49,14 +52,55 @@ export class BridgeHandler {
   }
 
   /**
+   * Returns remaining milliseconds before the overall execution deadline.
+   */
+  private remainingMs(): number {
+    return Math.max(0, this.timeoutMs - (Date.now() - this.startTime));
+  }
+
+  /**
+   * Races a promise against the remaining execution deadline.
+   * If the deadline expires first, sets `this.running = false` and rejects.
+   */
+  private raceDeadline<T>(fn: () => Promise<T>): Promise<T> {
+    const remaining = this.remainingMs();
+    if (remaining <= 0) {
+      this.running = false;
+      this.output.exitCode = 124;
+      this.output.stderr += `\n${this.commandName}: execution timeout exceeded\n`;
+      return Promise.reject(new Error("Operation timed out"));
+    }
+    const promise = fn();
+    return new Promise<T>((resolve, reject) => {
+      const timer = _setTimeout(() => {
+        this.running = false;
+        this.output.exitCode = 124;
+        this.output.stderr += `\n${this.commandName}: execution timeout exceeded\n`;
+        reject(new Error("Operation timed out"));
+      }, remaining);
+      promise.then(
+        (v) => {
+          _clearTimeout(timer);
+          resolve(v);
+        },
+        (e) => {
+          _clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
+  }
+
+  /**
    * Run the handler loop until EXIT operation or timeout.
    */
   async run(timeoutMs: number): Promise<BridgeOutput> {
     this.running = true;
-    const startTime = Date.now();
+    this.startTime = Date.now();
+    this.timeoutMs = timeoutMs;
 
     while (this.running) {
-      const elapsed = Date.now() - startTime;
+      const elapsed = Date.now() - this.startTime;
       if (elapsed >= timeoutMs) {
         this.output.stderr += `\n${this.commandName}: execution timeout exceeded\n`;
         this.output.exitCode = 124;
@@ -64,7 +108,7 @@ export class BridgeHandler {
       }
 
       // Wait for worker to set status to READY
-      const remainingMs = timeoutMs - elapsed;
+      const remainingMs = this.remainingMs();
       const ready = await this.protocol.waitUntilReady(remainingMs);
       if (!ready) {
         this.output.stderr += `\n${this.commandName}: execution timeout exceeded\n`;
@@ -403,7 +447,7 @@ export class BridgeHandler {
       return;
     }
 
-    const fullMsg = `python3: total output size exceeded (>${this.maxOutputSize} bytes), increase executionLimits.maxOutputSize\n`;
+    const fullMsg = `${this.commandName}: total output size exceeded (>${this.maxOutputSize} bytes), increase executionLimits.maxOutputSize\n`;
     const msg =
       fullMsg.length > this.maxOutputSize
         ? fullMsg.slice(0, this.maxOutputSize)
@@ -437,7 +481,8 @@ export class BridgeHandler {
   }
 
   private async handleHttpRequest(): Promise<void> {
-    if (!this.secureFetch) {
+    const fetchFn = this.secureFetch;
+    if (!fetchFn) {
       this.protocol.setErrorCode(ErrorCode.NETWORK_NOT_CONFIGURED);
       this.protocol.setResultFromString(
         "Network access not configured. Enable network in Bash options.",
@@ -452,11 +497,18 @@ export class BridgeHandler {
     try {
       // @banned-pattern-ignore: fallback default for HTTP options, accessed only by known keys below
       const request = requestJson ? JSON.parse(requestJson) : {};
-      const result = await this.secureFetch(url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      });
+      // Cap fetch to the remaining execution deadline via raceDeadline
+      // (secureFetch uses AbortController internally for its timeoutMs,
+      // but raceDeadline guarantees we don't hang if it never settles).
+      const remaining = this.remainingMs();
+      const result = await this.raceDeadline(() =>
+        fetchFn(url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          timeoutMs: remaining,
+        }),
+      );
 
       // Return response as JSON
       const response = JSON.stringify({
@@ -479,7 +531,8 @@ export class BridgeHandler {
   }
 
   private async handleExecCommand(): Promise<void> {
-    if (!this.exec) {
+    const execFn = this.exec;
+    if (!execFn) {
       this.protocol.setErrorCode(ErrorCode.IO_ERROR);
       this.protocol.setResultFromString(
         "Command execution not available in this context.",
@@ -491,8 +544,15 @@ export class BridgeHandler {
     const command = this.protocol.getPath();
     const dataStr = this.protocol.getDataAsString();
 
+    // Cap exec to the remaining execution deadline via AbortSignal + raceDeadline.
+    // AbortSignal provides cooperative cancellation; raceDeadline guarantees
+    // we don't hang if exec never respects the signal.
+    const controller = new AbortController();
     try {
-      const options: CommandExecOptions = { cwd: this.cwd };
+      const options: CommandExecOptions = {
+        cwd: this.cwd,
+        signal: controller.signal,
+      };
       if (dataStr) {
         const parsed = JSON.parse(dataStr);
         if (parsed.stdin) {
@@ -500,7 +560,7 @@ export class BridgeHandler {
         }
       }
 
-      const result = await this.exec(command, options);
+      const result = await this.raceDeadline(() => execFn(command, options));
 
       const response = JSON.stringify({
         stdout: result.stdout,
@@ -510,6 +570,7 @@ export class BridgeHandler {
       this.protocol.setResultFromString(response);
       this.protocol.setStatus(Status.SUCCESS);
     } catch (e) {
+      controller.abort();
       const message = e instanceof Error ? e.message : String(e);
       this.protocol.setErrorCode(ErrorCode.IO_ERROR);
       this.protocol.setResultFromString(message);

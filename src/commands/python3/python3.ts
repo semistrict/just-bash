@@ -404,6 +404,7 @@ async function executePython(
     env: mapToRecord(ctx.env),
     args: scriptArgs,
     scriptPath,
+    timeoutMs,
   };
 
   const workerRef: { current: Worker | null } = { current: null };

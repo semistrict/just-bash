@@ -1,4 +1,4 @@
-name: Python Tests
+name: WASM Tests
 
 on:
   push:
@@ -28,5 +28,5 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Run Python tests
-        run: pnpm test:python
+      - name: Run WASM tests
+        run: pnpm test:wasm

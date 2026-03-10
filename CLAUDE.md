@@ -20,7 +20,7 @@ pnpm test:run              # Run ALL tests (including spec tests)
 pnpm test:unit             # Run unit tests only (fast, no comparison/spec)
 pnpm test:comparison       # Run comparison tests only (uses fixtures)
 pnpm test:comparison:record # Re-record comparison test fixtures
-pnpm test:python           # Run Python/CPython Emscripten tests only
+pnpm test:wasm             # Run WASM tests (python3, sqlite3, js-exec)
 
 # Excluding spec tests (spec tests have known failures)
 pnpm test:run --exclude src/spec-tests
@@ -156,7 +156,7 @@ Input Script → Parser (src/parser/) → AST (src/ast/) → Interpreter (src/in
 - `-m MODULE` names are validated with `/^[a-zA-Z_][a-zA-Z0-9_.]*$/` to prevent code injection
 - Worker is terminated on timeout via `workerRef` pattern
 - WASM memory capped at 512MB (`-sMAXIMUM_MEMORY=536870912`)
-- Tests: `pnpm test:python` (excluded from `pnpm test:unit` by default due to WASM load time)
+- Tests: `pnpm test:wasm` (excluded from `pnpm test:unit` by default due to WASM load time)
 
 ### Adding Commands
 
