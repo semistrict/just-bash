@@ -1069,16 +1069,157 @@ async function executeCode(
     runtime = qjs.newRuntime();
     runtime.setMemoryLimit(MEMORY_LIMIT);
 
-    // Set up interrupt handler for infinite loop protection
+    // Set up interrupt handler for infinite loop protection.
+    // This is a loose backstop — timeouts (via worker termination) are the real
+    // guard against runaway code. The interrupt handler just provides a faster
+    // exit path for tight CPU-bound loops that don't yield to the event loop.
     let interruptCount = 0;
     runtime.setInterruptHandler(() => {
       interruptCount++;
-      // Check every INTERRUPT_CYCLES if we should abort
       return interruptCount > INTERRUPT_CYCLES;
     });
 
     context = runtime.newContext();
     setupContext(context, backend, input);
+
+    // Defense-in-depth: remove eval(), neuter Function constructors,
+    // and freeze all intrinsic prototypes to prevent prototype pollution.
+    {
+      const initResult = context.evalCode(
+        `{
+          // --- Block dynamic code compilation ---
+          Object.defineProperty(globalThis, 'eval', {
+            value: undefined,
+            writable: false,
+            configurable: false,
+          });
+          const BlockedFunction = function () {
+            throw new TypeError('Function constructor is not allowed');
+          };
+          const OrigFunction = Function;
+          BlockedFunction.prototype = OrigFunction.prototype;
+
+          // Capture function-type constructors before we patch them
+          const AsyncFunction = (async function(){}).constructor;
+          const GeneratorFunction = (function*(){}).constructor;
+          const AsyncGeneratorFunction = (async function*(){}).constructor;
+
+          // Patch .constructor on all function-type prototypes
+          for (const proto of [
+            OrigFunction.prototype,
+            AsyncFunction.prototype,
+            GeneratorFunction.prototype,
+            AsyncGeneratorFunction.prototype,
+          ]) {
+            Object.defineProperty(proto, 'constructor', {
+              value: BlockedFunction,
+              writable: false,
+              configurable: false,
+            });
+          }
+          Object.defineProperty(globalThis, 'Function', {
+            value: BlockedFunction,
+            writable: false,
+            configurable: false,
+          });
+
+          // --- Freeze all intrinsic prototypes ---
+          // Prevents prototype pollution (e.g. Array.prototype.x = ...).
+          // Only language intrinsics — not sandbox-injected objects
+          // (process, console, require) which need to stay mutable.
+          // Error prototypes are excluded: freezing them makes the inherited
+          // "message" property non-writable, which prevents new Error instances
+          // from having their own "message" set (JS spec OrdinarySet step 4).
+          const g = globalThis;
+          const toFreeze = [
+            Object, Object.prototype,
+            OrigFunction, OrigFunction.prototype,
+            AsyncFunction, AsyncFunction.prototype,
+            GeneratorFunction, GeneratorFunction.prototype,
+            AsyncGeneratorFunction, AsyncGeneratorFunction.prototype,
+            Array, Array.prototype,
+            String, String.prototype,
+            Number, Number.prototype,
+            Boolean, Boolean.prototype,
+            g.Symbol, g.Symbol && g.Symbol.prototype,
+            RegExp, RegExp.prototype,
+            Date, Date.prototype,
+            Map, Map.prototype,
+            Set, Set.prototype,
+            WeakMap, WeakMap.prototype,
+            WeakSet, WeakSet.prototype,
+            g.WeakRef, g.WeakRef && g.WeakRef.prototype,
+            Promise, Promise.prototype,
+            ArrayBuffer, ArrayBuffer.prototype,
+            g.SharedArrayBuffer, g.SharedArrayBuffer && g.SharedArrayBuffer.prototype,
+            g.DataView, g.DataView && g.DataView.prototype,
+            JSON, Math, g.Reflect, g.Proxy, g.Atomics,
+            g.BigInt, g.BigInt && g.BigInt.prototype,
+            BlockedFunction,
+          ];
+          // TypedArrays (guard against missing globals in QuickJS)
+          for (const name of [
+            'Int8Array','Uint8Array','Uint8ClampedArray',
+            'Int16Array','Uint16Array','Int32Array','Uint32Array',
+            'Float32Array','Float64Array',
+            'BigInt64Array','BigUint64Array',
+          ]) {
+            if (g[name]) {
+              toFreeze.push(g[name], g[name].prototype);
+            }
+          }
+          // %TypedArray% intrinsic (shared base)
+          if (g.Uint8Array) {
+            const taProto = Object.getPrototypeOf(g.Uint8Array.prototype);
+            if (taProto && taProto !== Object.prototype) toFreeze.push(taProto);
+            const taCtor = Object.getPrototypeOf(g.Uint8Array);
+            if (taCtor && taCtor !== OrigFunction.prototype) toFreeze.push(taCtor);
+          }
+          // Iterator prototypes
+          try {
+            const arrIterProto = Object.getPrototypeOf(
+              Object.getPrototypeOf([][Symbol.iterator]())
+            );
+            if (arrIterProto) {
+              toFreeze.push(arrIterProto);
+              const iterProto = Object.getPrototypeOf(arrIterProto);
+              if (iterProto) toFreeze.push(iterProto);
+            }
+          } catch {}
+          try {
+            toFreeze.push(Object.getPrototypeOf(new Map()[Symbol.iterator]()));
+          } catch {}
+          try {
+            toFreeze.push(Object.getPrototypeOf(new Set()[Symbol.iterator]()));
+          } catch {}
+          try {
+            toFreeze.push(Object.getPrototypeOf(''[Symbol.iterator]()));
+          } catch {}
+          try {
+            const genObj = (function*(){})();
+            toFreeze.push(Object.getPrototypeOf(genObj));
+            toFreeze.push(Object.getPrototypeOf(Object.getPrototypeOf(genObj)));
+          } catch {}
+          try {
+            const asyncGenObj = (async function*(){})();
+            toFreeze.push(Object.getPrototypeOf(asyncGenObj));
+            toFreeze.push(Object.getPrototypeOf(Object.getPrototypeOf(asyncGenObj)));
+          } catch {}
+
+          for (const obj of toFreeze) {
+            if (obj != null) {
+              try { Object.freeze(obj); } catch {}
+            }
+          }
+        }`,
+        "<sandbox-init>",
+      );
+      if (initResult.error) {
+        initResult.error.dispose();
+      } else {
+        initResult.value.dispose();
+      }
+    }
 
     // Set up module loader if module mode is enabled
     if (input.isModule) {
@@ -1244,6 +1385,9 @@ async function executeCode(
 // Initial load: initialize with defense-in-depth
 // Store the promise so the message handler can await the same initialization
 const initPromise = initializeWithDefense().catch((e) => {
+  // Intentionally omits protocolToken — init errors happen before we receive
+  // any input, so there is no token to echo back. js-exec.ts handles this by
+  // accepting init-error messages without a token check.
   parentPort?.postMessage({
     success: false,
     // @banned-pattern-ignore: worker-internal init error; message stays within worker protocol, sanitized by js-exec.ts before user output

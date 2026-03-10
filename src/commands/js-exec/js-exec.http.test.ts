@@ -151,6 +151,66 @@ describe("js-exec http operations", () => {
     });
   });
 
+  describe("large JSON API response processing", () => {
+    it("should fetch and process 50KB of JSON", async () => {
+      // Generate a realistic ~50KB JSON API response: array of user records
+      const users = Array.from({ length: 500 }, (_, i) => ({
+        id: i + 1,
+        name: `User ${i + 1}`,
+        email: `user${i + 1}@example.com`,
+        age: 20 + (i % 50),
+        active: i % 3 !== 0,
+        score: Math.round((i * 7.3 + 11) % 100),
+      }));
+      const jsonPayload = JSON.stringify(users);
+      // Verify it's roughly 50KB
+      expect(jsonPayload.length).toBeGreaterThan(40_000);
+      expect(jsonPayload.length).toBeLessThan(70_000);
+
+      mockFetch.mockResolvedValueOnce(
+        new Response(jsonPayload, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+      const env = new Bash({
+        javascript: true,
+        network: { allowedUrlPrefixes: ["https://api.example.com/"] },
+      });
+
+      // Realistic data processing: filter active users, compute average score
+      const result = await env.exec(
+        `js-exec -c "
+          var r = await fetch('https://api.example.com/users');
+          var users = await r.json();
+          var active = users.filter(function(u) { return u.active; });
+          var avgScore = active.reduce(function(s, u) { return s + u.score; }, 0) / active.length;
+          var oldest = active.reduce(function(a, b) { return a.age > b.age ? a : b; });
+          console.log('total:', users.length);
+          console.log('active:', active.length);
+          console.log('avgScore:', Math.round(avgScore));
+          console.log('oldest:', oldest.name, oldest.age);
+        "`,
+      );
+
+      // Compute expected values
+      const activeUsers = users.filter((u) => u.active);
+      const expectedAvg = Math.round(
+        activeUsers.reduce((s, u) => s + u.score, 0) / activeUsers.length,
+      );
+      const expectedOldest = activeUsers.reduce((a, b) =>
+        a.age > b.age ? a : b,
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(
+        `total: 500\nactive: ${activeUsers.length}\navgScore: ${expectedAvg}\noldest: ${expectedOldest.name} ${expectedOldest.age}\n`,
+      );
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
   describe("Web API classes", () => {
     it("should support URL class", async () => {
       const env = new Bash({ javascript: true });

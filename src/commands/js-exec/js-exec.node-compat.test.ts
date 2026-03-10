@@ -702,6 +702,60 @@ describe("js-exec Node.js compatibility", () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it("should support os.arch()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('os').arch())"`,
+      );
+      expect(result.stdout).toBe("x64\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.type()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('os').type())"`,
+      );
+      expect(result.stdout).toBe("Linux\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.hostname()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('os').hostname())"`,
+      );
+      expect(result.stdout).toBe("sandbox\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.cpus()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(JSON.stringify(require('os').cpus()))"`,
+      );
+      expect(result.stdout).toBe("[]\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.totalmem() and os.freemem()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var os = require('os'); console.log(os.totalmem(), os.freemem())"`,
+      );
+      expect(result.stdout).toBe("0 0\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.endianness()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('os').endianness())"`,
+      );
+      expect(result.stdout).toBe("LE\n");
+      expect(result.exitCode).toBe(0);
+    });
+
     it("should support ESM import from 'os'", async () => {
       const env = new Bash({ javascript: true });
       const result = await env.exec(
@@ -760,6 +814,60 @@ describe("js-exec Node.js compatibility", () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it("should support assert.equal and assert.notEqual", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.equal(1, '1'); a.notEqual(1, 2); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.strictEqual and assert.notStrictEqual", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.strictEqual(1, 1); a.notStrictEqual(1, '1'); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.deepStrictEqual", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.deepStrictEqual({x:[1,2]}, {x:[1,2]}); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.notDeepEqual", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.notDeepEqual({x:1}, {x:2}); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.doesNotThrow", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.doesNotThrow(function() { return 1; }); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.fail", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); try { a.fail('nope'); } catch(e) { console.log(e.message); }"`,
+      );
+      expect(result.stdout).toBe("nope\n");
+      expect(result.exitCode).toBe(0);
+    });
+
     it("should support ESM import from 'assert'", async () => {
       const env = new Bash({ javascript: true });
       const result = await env.exec(
@@ -771,12 +879,93 @@ describe("js-exec Node.js compatibility", () => {
   });
 
   describe("util module", () => {
-    it("should support util.format", async () => {
+    it("should support util.format with %s and %d", async () => {
       const env = new Bash({ javascript: true });
       const result = await env.exec(
         `js-exec -c "console.log(require('util').format('%s=%d', 'x', 42))"`,
       );
       expect(result.stdout).toBe("x=42\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.format %i %j %f specifiers", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var f = require('util').format; console.log(f('%i', 3.7)); console.log(f('%j', {a:1})); console.log(f('%f', '3.14'))"`,
+      );
+      expect(result.stdout).toBe('3.7\n{"a":1}\n3.14\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.format %o/%O object specifiers", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var f = require('util').format; console.log(f('%o', [1,2])); console.log(f('%O', {x:1}))"`,
+      );
+      expect(result.stdout).toBe('[1,2]\n{"x":1}\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.format with no args", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(JSON.stringify(require('util').format()))"`,
+      );
+      expect(result.stdout).toBe('""\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should keep literal specifiers when args insufficient", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('util').format('%s %s %s', 'a'))"`,
+      );
+      expect(result.stdout).toBe("a %s %s\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should append extra args beyond format specifiers", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('util').format('%s', 'a', 'b', 'c'))"`,
+      );
+      expect(result.stdout).toBe("a b c\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should space-separate all args when no format string", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('util').format(1, 2, 3))"`,
+      );
+      expect(result.stdout).toBe("1 2 3\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.format %% escape", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('util').format('100%%'))"`,
+      );
+      expect(result.stdout).toBe("100%\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.inspect", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var u = require('util'); console.log(u.inspect({a:1})); console.log(u.inspect(null)); console.log(u.inspect(undefined))"`,
+      );
+      expect(result.stdout).toBe('{"a":1}\nnull\nundefined\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.promisify", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -m -c "var u = require('util'); function cbFn(val, cb) { cb(null, val + '!'); } var p = u.promisify(cbFn); var r = await p('hi'); console.log(r)"`,
+      );
+      expect(result.stdout).toBe("hi!\n");
       expect(result.exitCode).toBe(0);
     });
 
@@ -846,6 +1035,78 @@ describe("js-exec Node.js compatibility", () => {
       expect(result.stdout).toBe("test\n");
       expect(result.exitCode).toBe(0);
     });
+
+    it("should support Buffer.slice", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var b = Buffer.from('hello'); console.log(b.slice(1, 3).toString())"`,
+      );
+      expect(result.stdout).toBe("el\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.copy", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = Buffer.from('hello'); var b = Buffer.alloc(3); a.copy(b, 0, 1, 4); console.log(b.toString())"`,
+      );
+      expect(result.stdout).toBe("ell\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.write", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var b = Buffer.alloc(5); b.write('hi'); console.log(b.slice(0, 2).toString())"`,
+      );
+      expect(result.stdout).toBe("hi\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.fill", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var b = Buffer.alloc(3); b.fill(65); console.log(b.toString())"`,
+      );
+      expect(result.stdout).toBe("AAA\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.equals", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(Buffer.from('ab').equals(Buffer.from('ab')), Buffer.from('ab').equals(Buffer.from('cd')))"`,
+      );
+      expect(result.stdout).toBe("true false\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer readUInt8/writeUInt8", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var b = Buffer.alloc(2); b.writeUInt8(42, 0); b.writeUInt8(99, 1); console.log(b.readUInt8(0), b.readUInt8(1))"`,
+      );
+      expect(result.stdout).toBe("42 99\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.byteLength", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(Buffer.byteLength('hello'), Buffer.byteLength(''))"`,
+      );
+      expect(result.stdout).toBe("5 0\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.toJSON", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var j = Buffer.from('AB').toJSON(); console.log(j.type, JSON.stringify(j.data))"`,
+      );
+      expect(result.stdout).toBe("Buffer [65,66]\n");
+      expect(result.exitCode).toBe(0);
+    });
   });
 
   describe("stream module", () => {
@@ -868,6 +1129,24 @@ describe("js-exec Node.js compatibility", () => {
       expect(result.stdout).toBe("hi\n");
       expect(result.exitCode).toBe(0);
     });
+
+    it("should support end() with buffer arg", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var SD = require('string_decoder').StringDecoder; var d = new SD(); console.log(d.end(Buffer.from('bye')))"`,
+      );
+      expect(result.stdout).toBe("bye\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should return empty string from end() without arg", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var SD = require('string_decoder').StringDecoder; var d = new SD(); console.log(JSON.stringify(d.end()))"`,
+      );
+      expect(result.stdout).toBe('""\n');
+      expect(result.exitCode).toBe(0);
+    });
   });
 
   describe("querystring module", () => {
@@ -877,6 +1156,24 @@ describe("js-exec Node.js compatibility", () => {
         `js-exec -c "var qs = require('querystring'); var o = qs.parse('a=1&b=2'); console.log(o.a, o.b); console.log(qs.stringify({x:'3',y:'4'}))"`,
       );
       expect(result.stdout).toBe("1 2\nx=3&y=4\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support escape and unescape", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var qs = require('querystring'); console.log(qs.escape('a b&c')); console.log(qs.unescape('a%20b%26c'))"`,
+      );
+      expect(result.stdout).toBe("a%20b%26c\na b&c\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support custom separators", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var qs = require('querystring'); var o = qs.parse('a:1;b:2', ';', ':'); console.log(o.a, o.b); console.log(qs.stringify({x:'1',y:'2'}, ';', ':'))"`,
+      );
+      expect(result.stdout).toBe("1 2\nx:1;y:2\n");
       expect(result.exitCode).toBe(0);
     });
   });

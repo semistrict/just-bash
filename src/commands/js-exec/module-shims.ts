@@ -206,8 +206,10 @@ var _util = {
       if (m === '%o' || m === '%O') return JSON.stringify(v);
       return m;
     });
-    while (i < args.length) str += ' ' + (typeof args[i] === 'string' ? args[i] : JSON.stringify(args[i]));
-    i++;
+    while (i < args.length) {
+      str += ' ' + (typeof args[i] === 'string' ? args[i] : JSON.stringify(args[i]));
+      i++;
+    }
     return str;
   },
   inspect: function(obj, opts) {

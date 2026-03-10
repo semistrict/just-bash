@@ -94,7 +94,10 @@ const Offset = {
 const Size = {
   CONTROL_REGION: 32,
   PATH_BUFFER: 4096,
-  DATA_BUFFER: 1048576, // 1MB (reduced from 16MB for faster tests)
+  // 1MB limit applies to all FS read/write operations through the bridge.
+  // Files larger than this will be truncated. This is tight — consider
+  // increasing if real workloads hit the cap. Reduced from 16MB for faster tests.
+  DATA_BUFFER: 1048576,
   TOTAL: 1052704, // 32 + 4096 + 1MB
 } as const;
 
