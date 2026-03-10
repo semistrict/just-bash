@@ -66,8 +66,8 @@ vi.mock("node:worker_threads", () => {
   return { Worker: MockWorker };
 });
 
-vi.mock("./fs-bridge-handler.js", () => {
-  class MockFsBridgeHandler {
+vi.mock("../worker-bridge/bridge-handler.js", () => {
+  class MockBridgeHandler {
     async run(): Promise<{ stdout: string; stderr: string; exitCode: number }> {
       if (mockState.bridgeRunError) {
         throw mockState.bridgeRunError;
@@ -76,10 +76,10 @@ vi.mock("./fs-bridge-handler.js", () => {
     }
   }
 
-  return { FsBridgeHandler: MockFsBridgeHandler };
+  return { BridgeHandler: MockBridgeHandler };
 });
 
-vi.mock("./protocol.js", () => {
+vi.mock("../worker-bridge/protocol.js", () => {
   return {
     createSharedBuffer: () => new _SAB(4096),
   };

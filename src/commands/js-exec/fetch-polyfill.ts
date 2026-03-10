@@ -452,7 +452,7 @@ export const FETCH_POLYFILL_SOURCE = `
   globalThis.Request = Request;
 
   // --- Wrap native fetch ---
-  var _nativeFetch = globalThis.__fetch;
+  var _nativeFetch = globalThis[Symbol.for('jb:fetch')];
   globalThis.fetch = function fetch(input, init) {
     try {
       var url, method, headers, body;

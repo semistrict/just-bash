@@ -418,45 +418,158 @@ describe("js-exec Node.js compatibility", () => {
   });
 
   describe("error messages with file names and line numbers", () => {
-    it("should include file name in error from script file", async () => {
+    it("should show file path and line for ReferenceError in script file", async () => {
       const env = new Bash({
         javascript: true,
         files: {
-          "/home/user/bad.mjs": "const x = 1;\nundefinedVar.foo;\n",
+          "/home/user/app.mjs":
+            "const x = 1;\nconst y = 2;\nundefinedVar.foo;\n",
         },
       });
-      const result = await env.exec("js-exec /home/user/bad.mjs");
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("bad.mjs");
-      expect(result.stderr).toContain("undefinedVar");
+      const result = await env.exec("js-exec /home/user/app.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at <anonymous> (/home/user/app.mjs:3:1): 'undefinedVar' is not defined\n",
+      );
+      expect(result.stdout).toBe("");
     });
 
-    it("should include line number in error from multi-line script", async () => {
+    it("should show file path and line for TypeError in script file", async () => {
       const env = new Bash({
         javascript: true,
         files: {
-          "/home/user/err.mjs":
-            "const a = 1;\nconst b = 2;\nundefinedVar.foo;\n",
+          "/home/user/app.mjs": "const x = null;\nx.foo();\n",
         },
       });
-      const result = await env.exec("js-exec /home/user/err.mjs");
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("err.mjs");
-      expect(result.stderr).toContain("not defined");
+      const result = await env.exec("js-exec /home/user/app.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at <anonymous> (/home/user/app.mjs:2:2): cannot read property 'foo' of null\n",
+      );
+      expect(result.stdout).toBe("");
     });
 
-    it("should include file name in error from imported module", async () => {
+    it("should show -c and column for inline code errors", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "const x = 1; undefinedVar.foo;"`,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at <eval> (-c:1:14): 'undefinedVar' is not defined\n",
+      );
+      expect(result.stdout).toBe("");
+    });
+
+    it("should show originating file and function name for imported module errors", async () => {
       const env = new Bash({
         javascript: true,
         files: {
           "/home/user/main.mjs":
-            "import { broken } from './lib.mjs';\nconsole.log(broken);\n",
-          "/home/user/lib.mjs": "export const broken = undefinedVar.foo;\n",
+            "import { helper } from './utils.mjs';\nhelper();\n",
+          "/home/user/utils.mjs":
+            "export function helper() {\n  undefinedVar.foo;\n}\n",
         },
       });
       const result = await env.exec("js-exec /home/user/main.mjs");
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("lib.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at helper (/home/user/utils.mjs:2:3): 'undefinedVar' is not defined\n",
+      );
+      expect(result.stdout).toBe("");
+    });
+
+    it("should show deepest frame for deeply nested import errors", async () => {
+      const env = new Bash({
+        javascript: true,
+        files: {
+          "/home/user/main.mjs": "import './a.mjs';\n",
+          "/home/user/a.mjs": "import './b.mjs';\n",
+          "/home/user/b.mjs": "throw new Error('deep error');\n",
+        },
+      });
+      const result = await env.exec("js-exec /home/user/main.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at <anonymous> (/home/user/b.mjs:1:16): deep error\n",
+      );
+      expect(result.stdout).toBe("");
+    });
+
+    it("should show function name in stack trace for thrown Error", async () => {
+      const env = new Bash({
+        javascript: true,
+        files: {
+          "/home/user/app.mjs": "import { run } from './lib.mjs';\nrun();\n",
+          "/home/user/lib.mjs":
+            "export function run() {\n  doStuff();\n}\nfunction doStuff() {\n  throw new Error('boom');\n}\n",
+        },
+      });
+      const result = await env.exec("js-exec /home/user/app.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at doStuff (/home/user/lib.mjs:5:18): boom\n",
+      );
+      expect(result.stdout).toBe("");
+    });
+
+    it("should show correct line for error late in a long file", async () => {
+      const env = new Bash({
+        javascript: true,
+        files: {
+          "/home/user/long.mjs": `${Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};`).join("\n")}\nundefinedVar.crash;\n`,
+        },
+      });
+      const result = await env.exec("js-exec /home/user/long.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at <anonymous> (/home/user/long.mjs:21:1): 'undefinedVar' is not defined\n",
+      );
+      expect(result.stdout).toBe("");
+    });
+
+    it("should show file and line for syntax errors", async () => {
+      const env = new Bash({
+        javascript: true,
+        files: {
+          "/home/user/bad.mjs": "function foo() {\n  if (true\n}\n",
+        },
+      });
+      const result = await env.exec("js-exec /home/user/bad.mjs");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("at /home/user/bad.mjs:3:1: expecting ')'\n");
+      expect(result.stdout).toBe("");
+    });
+
+    it("should output thrown string values directly", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(`js-exec -c "throw 'bare string error'"`);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("bare string error\n");
+      expect(result.stdout).toBe("");
+    });
+
+    it("should output thrown number values directly", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(`js-exec -c "throw 42"`);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("42\n");
+      expect(result.stdout).toBe("");
+    });
+
+    it("should show file path for CJS script errors without <eval> wrapper", async () => {
+      const env = new Bash({
+        javascript: true,
+        files: {
+          "/home/user/app.js": "const x = 1;\nundefinedVar.foo;\n",
+        },
+      });
+      const result = await env.exec("js-exec /home/user/app.js");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "at /home/user/app.js:2:1: 'undefinedVar' is not defined\n",
+      );
+      expect(result.stdout).toBe("");
     });
 
     it("should show callback error message clearly", async () => {
@@ -526,7 +639,272 @@ describe("js-exec Node.js compatibility", () => {
     it("should throw for unknown modules", async () => {
       const env = new Bash({ javascript: true });
       const result = await env.exec(
+        `js-exec -c "try { require('totally_unknown'); } catch(e) { console.log(e.message); }"`,
+      );
+      expect(result.stdout).toContain("Cannot find module");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("os module", () => {
+    it("should support require('os').platform()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('os').platform())"`,
+      );
+      expect(result.stdout).toBe("linux\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.homedir() and os.tmpdir()", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var os = require('os'); console.log(os.homedir(), os.tmpdir())"`,
+      );
+      expect(result.stdout).toBe("/home/user /tmp\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support os.EOL", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(JSON.stringify(require('os').EOL))"`,
+      );
+      expect(result.stdout).toBe('"\\n"\n');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support ESM import from 'os'", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -m -c "import { platform } from 'os'; console.log(platform())"`,
+      );
+      expect(result.stdout).toBe("linux\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("url module", () => {
+    it("should re-export URL from require('url')", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var u = new (require('url').URL)('https://example.com/path?q=1'); console.log(u.hostname, u.pathname)"`,
+      );
+      expect(result.stdout).toBe("example.com /path\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("assert module", () => {
+    it("should not throw on assert.ok(true)", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "require('assert').ok(true); console.log('passed')"`,
+      );
+      expect(result.stdout).toBe("passed\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should throw on assert.strictEqual mismatch", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "try { require('assert').strictEqual(1, 2); } catch(e) { console.log('caught'); }"`,
+      );
+      expect(result.stdout).toBe("caught\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.deepEqual", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.deepEqual({x:1}, {x:1}); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support assert.throws", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var a = require('assert'); a.throws(function() { throw new Error('boom'); }); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support ESM import from 'assert'", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -m -c "import assert from 'assert'; assert(true); console.log('ok')"`,
+      );
+      expect(result.stdout).toBe("ok\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("util module", () => {
+    it("should support util.format", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(require('util').format('%s=%d', 'x', 42))"`,
+      );
+      expect(result.stdout).toBe("x=42\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support util.types.isDate", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var u = require('util'); console.log(u.types.isDate(new Date()), u.types.isDate('nope'))"`,
+      );
+      expect(result.stdout).toBe("true false\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("events module", () => {
+    it("should support EventEmitter", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var EE = require('events').EventEmitter; var e = new EE(); e.on('test', function(v) { console.log(v); }); e.emit('test', 'hello')"`,
+      );
+      expect(result.stdout).toBe("hello\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support ESM import of EventEmitter", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -m -c "import { EventEmitter } from 'events'; var e = new EventEmitter(); var v = []; e.on('x', function(a) { v.push(a); }); e.emit('x', 1); e.emit('x', 2); console.log(v.join(','))"`,
+      );
+      expect(result.stdout).toBe("1,2\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("buffer module", () => {
+    it("should support Buffer.from string", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var b = require('buffer').Buffer.from('hello'); console.log(b.toString(), b.length)"`,
+      );
+      expect(result.stdout).toBe("hello 5\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.alloc and Buffer.isBuffer", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var B = require('buffer').Buffer; var b = B.alloc(4); console.log(B.isBuffer(b), b.length)"`,
+      );
+      expect(result.stdout).toBe("true 4\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should support Buffer.concat", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var B = require('buffer').Buffer; var c = B.concat([B.from('ab'), B.from('cd')]); console.log(c.toString(), c.length)"`,
+      );
+      expect(result.stdout).toBe("abcd 4\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should expose global Buffer", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "console.log(Buffer.from('test').toString())"`,
+      );
+      expect(result.stdout).toBe("test\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("stream module", () => {
+    it("should expose stream classes", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var s = require('stream'); console.log(typeof s.Readable, typeof s.Writable, typeof s.Transform)"`,
+      );
+      expect(result.stdout).toBe("function function function\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("string_decoder module", () => {
+    it("should decode buffers to strings", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var SD = require('string_decoder').StringDecoder; var d = new SD(); console.log(d.write(Buffer.from('hi')))"`,
+      );
+      expect(result.stdout).toBe("hi\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("querystring module", () => {
+    it("should parse and stringify", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "var qs = require('querystring'); var o = qs.parse('a=1&b=2'); console.log(o.a, o.b); console.log(qs.stringify({x:'3',y:'4'}))"`,
+      );
+      expect(result.stdout).toBe("1 2\nx=3&y=4\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("unsupported module errors", () => {
+    it("should give clear error for require('http') with fetch hint", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
         `js-exec -c "try { require('http'); } catch(e) { console.log(e.message); }"`,
+      );
+      expect(result.stdout).toContain("not available in the js-exec sandbox");
+      expect(result.stdout).toContain("fetch()");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should give clear error for require('node:http')", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "try { require('node:http'); } catch(e) { console.log(e.message); }"`,
+      );
+      expect(result.stdout).toContain("not available in the js-exec sandbox");
+      expect(result.stdout).toContain("fetch()");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should give clear error for require('crypto')", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "try { require('crypto'); } catch(e) { console.log(e.message); }"`,
+      );
+      expect(result.stdout).toContain("not available in the js-exec sandbox");
+      expect(result.stdout).toContain("Crypto");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should give clear error for require('net')", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "try { require('net'); } catch(e) { console.log(e.message); }"`,
+      );
+      expect(result.stdout).toContain("not available in the js-exec sandbox");
+      expect(result.stdout).toContain("Network socket");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should give clear error for ESM import of unsupported module", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(`js-exec -m -c "import 'http'"`);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("not available in the js-exec sandbox");
+    });
+
+    it("should still give generic error for truly unknown modules", async () => {
+      const env = new Bash({ javascript: true });
+      const result = await env.exec(
+        `js-exec -c "try { require('nonexistent'); } catch(e) { console.log(e.message); }"`,
       );
       expect(result.stdout).toContain("Cannot find module");
       expect(result.exitCode).toBe(0);

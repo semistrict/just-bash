@@ -141,6 +141,6 @@ export const PATH_MODULE_SOURCE = `
   var posix = { sep: sep, delimiter: delimiter, join: join, resolve: resolve, normalize: normalize, isAbsolute: isAbsolute, dirname: dirname, basename: basename, extname: extname, relative: relative, parse: parse, format: format };
   posix.posix = posix;
 
-  globalThis.__path = posix;
+  globalThis[Symbol.for('jb:path')] = posix;
 })();
 `;

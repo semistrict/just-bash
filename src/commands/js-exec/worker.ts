@@ -21,6 +21,18 @@ import {
 } from "../../security/index.js";
 import { SyncBackend } from "../worker-bridge/sync-backend.js";
 import { FETCH_POLYFILL_SOURCE } from "./fetch-polyfill.js";
+import {
+  ASSERT_MODULE_SOURCE,
+  BUFFER_MODULE_SOURCE,
+  EVENTS_MODULE_SOURCE,
+  OS_MODULE_SOURCE,
+  QUERYSTRING_MODULE_SOURCE,
+  STREAM_MODULE_SOURCE,
+  STRING_DECODER_MODULE_SOURCE,
+  UNSUPPORTED_MODULES,
+  URL_MODULE_SOURCE,
+  UTIL_MODULE_SOURCE,
+} from "./module-shims.js";
 import { PATH_MODULE_SOURCE } from "./path-polyfill.js";
 
 export interface JsExecWorkerInput {
@@ -82,7 +94,13 @@ function formatError(errorVal: unknown): string {
         const trimmed = line.trim();
         if (trimmed.startsWith("at ")) {
           // Stack line like "at /home/user/file.mjs:3" or "at func (/file.mjs:3)"
-          return `${trimmed}: ${msg}`;
+          // Strip "<eval>" wrapper for file-based scripts so the output matches
+          // the cleaner syntax-error format: "at /path/file.js:2:1: message"
+          const cleaned = trimmed.replace(
+            /^at <eval> \((\/.+)\)$/,
+            "at $1",
+          );
+          return `${cleaned}: ${msg}`;
         }
       }
     }
@@ -206,7 +224,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export default _fs;
   `,
   path: `${PATH_MODULE_SOURCE}
-    const _path = globalThis.__path;
+    const _path = globalThis[Symbol.for('jb:path')];
     export const join = _path.join;
     export const resolve = _path.resolve;
     export const normalize = _path.normalize;
@@ -235,7 +253,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export default _process;
   `,
   child_process: `
-    const _exec = globalThis.__exec;
+    const _exec = globalThis[Symbol.for('jb:exec')];
     export function execSync(cmd, opts) {
       var r = _exec(cmd, opts);
       if (r.exitCode !== 0) {
@@ -256,7 +274,96 @@ const VIRTUAL_MODULES: Record<string, string> = {
     }
     export default { exec: exec, execSync: execSync, spawnSync: spawnSync };
   `,
+  os: `
+    const _os = globalThis[Symbol.for('jb:os')];
+    export const platform = _os.platform;
+    export const arch = _os.arch;
+    export const homedir = _os.homedir;
+    export const tmpdir = _os.tmpdir;
+    export const type = _os.type;
+    export const hostname = _os.hostname;
+    export const EOL = _os.EOL;
+    export const cpus = _os.cpus;
+    export const totalmem = _os.totalmem;
+    export const freemem = _os.freemem;
+    export const endianness = _os.endianness;
+    export default _os;
+  `,
+  url: `
+    const _url = globalThis[Symbol.for('jb:url')];
+    export const URL = _url.URL;
+    export const URLSearchParams = _url.URLSearchParams;
+    export const parse = _url.parse;
+    export const format = _url.format;
+    export default _url;
+  `,
+  assert: `
+    const _assert = globalThis[Symbol.for('jb:assert')];
+    export const ok = _assert.ok;
+    export const equal = _assert.equal;
+    export const notEqual = _assert.notEqual;
+    export const strictEqual = _assert.strictEqual;
+    export const notStrictEqual = _assert.notStrictEqual;
+    export const deepEqual = _assert.deepEqual;
+    export const deepStrictEqual = _assert.deepStrictEqual;
+    export const notDeepEqual = _assert.notDeepEqual;
+    export const throws = _assert.throws;
+    export const doesNotThrow = _assert.doesNotThrow;
+    export const fail = _assert.fail;
+    export default _assert;
+  `,
+  util: `
+    const _util = globalThis[Symbol.for('jb:util')];
+    export const format = _util.format;
+    export const inspect = _util.inspect;
+    export const promisify = _util.promisify;
+    export const types = _util.types;
+    export const inherits = _util.inherits;
+    export default _util;
+  `,
+  events: `
+    const _events = globalThis[Symbol.for('jb:events')];
+    export const EventEmitter = _events.EventEmitter;
+    export default _events;
+  `,
+  buffer: `
+    const _buffer = globalThis[Symbol.for('jb:buffer')];
+    export const Buffer = _buffer.Buffer;
+    export default _buffer;
+  `,
+  stream: `
+    const _stream = globalThis[Symbol.for('jb:stream')];
+    export const Stream = _stream.Stream;
+    export const Readable = _stream.Readable;
+    export const Writable = _stream.Writable;
+    export const Duplex = _stream.Duplex;
+    export const Transform = _stream.Transform;
+    export const PassThrough = _stream.PassThrough;
+    export const pipeline = _stream.pipeline;
+    export default _stream;
+  `,
+  string_decoder: `
+    const _sd = globalThis[Symbol.for('jb:string_decoder')];
+    export const StringDecoder = _sd.StringDecoder;
+    export default _sd;
+  `,
+  querystring: `
+    const _qs = globalThis[Symbol.for('jb:querystring')];
+    export const parse = _qs.parse;
+    export const stringify = _qs.stringify;
+    export const escape = _qs.escape;
+    export const unescape = _qs.unescape;
+    export const decode = _qs.decode;
+    export const encode = _qs.encode;
+    export default _qs;
+  `,
 };
+
+// Add throw-at-import stubs for unsupported Node.js modules
+for (const [name, hint] of Object.entries(UNSUPPORTED_MODULES)) {
+  VIRTUAL_MODULES[name] =
+    `throw new Error("Module '${name}' is not available in the js-exec sandbox. ${hint}");`;
+}
 
 /**
  * Set up the QuickJS context with global APIs.
@@ -687,6 +794,12 @@ function setupContext(
   // Set up Node.js compatibility: sync aliases, promises, callback detection, process enhancements
   const compatResult = context.evalCode(
     `(function() {
+  // Bridge native handles from string keys (set by QuickJS setProp) to symbol keys
+  globalThis[Symbol.for('jb:fetch')] = globalThis.__fetch;
+  globalThis[Symbol.for('jb:exec')] = globalThis.__exec;
+  delete globalThis.__fetch;
+  delete globalThis.__exec;
+
   var _fs = globalThis.fs;
   // Save original native functions
   var orig = {};
@@ -773,8 +886,19 @@ function setupContext(
   // Initialize fetch polyfill (URL, Headers, Request, Response, fetch)
   ${FETCH_POLYFILL_SOURCE}
 
+  // Initialize additional module shims
+  ${EVENTS_MODULE_SOURCE}
+  ${OS_MODULE_SOURCE}
+  ${URL_MODULE_SOURCE}
+  ${ASSERT_MODULE_SOURCE}
+  ${UTIL_MODULE_SOURCE}
+  ${BUFFER_MODULE_SOURCE}
+  ${STREAM_MODULE_SOURCE}
+  ${STRING_DECODER_MODULE_SOURCE}
+  ${QUERYSTRING_MODULE_SOURCE}
+
   // require() shim for CommonJS compatibility
-  var _execFn = globalThis.__exec;
+  var _execFn = globalThis[Symbol.for('jb:exec')];
   var _childProcess = {
     exec: function(cmd, opts) { return _execFn(cmd, opts); },
     execSync: function(cmd, opts) {
@@ -798,16 +922,29 @@ function setupContext(
 
   var _modules = {
     fs: _fs,
-    path: globalThis.__path,
+    path: globalThis[Symbol.for('jb:path')],
     child_process: _childProcess,
     process: _p,
-    console: globalThis.console
+    console: globalThis.console,
+    os: globalThis[Symbol.for('jb:os')],
+    url: globalThis[Symbol.for('jb:url')],
+    assert: globalThis[Symbol.for('jb:assert')],
+    util: globalThis[Symbol.for('jb:util')],
+    events: globalThis[Symbol.for('jb:events')],
+    buffer: globalThis[Symbol.for('jb:buffer')],
+    stream: globalThis[Symbol.for('jb:stream')],
+    string_decoder: globalThis[Symbol.for('jb:string_decoder')],
+    querystring: globalThis[Symbol.for('jb:querystring')]
   };
+
+  var _unsupported = ${JSON.stringify(UNSUPPORTED_MODULES)};
 
   globalThis.require = function(name) {
     if (name.startsWith('node:')) name = name.slice(5);
     var mod = _modules[name];
     if (mod) return mod;
+    var hint = _unsupported[name];
+    if (hint) throw new Error("Module '" + name + "' is not available in the js-exec sandbox. " + hint);
     throw new Error("Cannot find module '" + name + "'");
   };
   globalThis.require.resolve = function(name) { return name; };

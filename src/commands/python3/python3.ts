@@ -27,7 +27,9 @@ import { createSharedBuffer } from "../worker-bridge/protocol.js";
 import type { WorkerInput, WorkerOutput } from "./worker.js";
 
 /** Default Python execution timeout in milliseconds */
-const DEFAULT_PYTHON_TIMEOUT_MS = 30000;
+const DEFAULT_PYTHON_TIMEOUT_MS = 10000;
+/** Default Python execution timeout when network is enabled */
+const DEFAULT_PYTHON_NETWORK_TIMEOUT_MS = 60000;
 
 const python3Help = {
   name: "python3",
@@ -391,7 +393,10 @@ async function executePython(
     ctx.limits?.maxOutputSize ?? 0,
   );
 
-  const timeoutMs = ctx.limits?.maxPythonTimeoutMs ?? DEFAULT_PYTHON_TIMEOUT_MS;
+  const defaultTimeout = ctx.fetch
+    ? DEFAULT_PYTHON_NETWORK_TIMEOUT_MS
+    : DEFAULT_PYTHON_TIMEOUT_MS;
+  const timeoutMs = ctx.limits?.maxPythonTimeoutMs ?? defaultTimeout;
   const queueState = getQueueState(ctx.fs);
 
   const workerInput: WorkerInput = {

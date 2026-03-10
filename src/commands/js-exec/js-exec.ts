@@ -25,7 +25,9 @@ import { createSharedBuffer } from "../worker-bridge/protocol.js";
 import type { JsExecWorkerInput, JsExecWorkerOutput } from "./worker.js";
 
 /** Default JavaScript execution timeout in milliseconds */
-const DEFAULT_JS_TIMEOUT_MS = 30000;
+const DEFAULT_JS_TIMEOUT_MS = 10000;
+/** Default JavaScript execution timeout when network is enabled */
+const DEFAULT_JS_NETWORK_TIMEOUT_MS = 60000;
 
 /**
  * Tracks js-exec execution context via AsyncLocalStorage.
@@ -319,7 +321,10 @@ async function executeJSInner(
     wrappedExec,
   );
 
-  const timeoutMs = ctx.limits?.maxJsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS;
+  const defaultTimeout = ctx.fetch
+    ? DEFAULT_JS_NETWORK_TIMEOUT_MS
+    : DEFAULT_JS_TIMEOUT_MS;
+  const timeoutMs = ctx.limits?.maxJsTimeoutMs ?? defaultTimeout;
 
   const workerInput: JsExecWorkerInput = {
     sharedBuffer,
