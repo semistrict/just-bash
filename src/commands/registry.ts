@@ -104,7 +104,7 @@ export type NetworkCommandName = "curl";
 export type PythonCommandName = "python3" | "python";
 
 /** JavaScript command names (only available when javascript is explicitly enabled) */
-export type JavaScriptCommandName = "js-exec";
+export type JavaScriptCommandName = "js-exec" | "node";
 
 /** All command names including network, python, and javascript commands */
 export type AllCommandName =
@@ -515,6 +515,10 @@ if (typeof __BROWSER__ === "undefined" || !__BROWSER__) {
   jsCommandLoaders.push({
     name: "js-exec",
     load: async () => (await import("./js-exec/js-exec.js")).jsExecCommand,
+  });
+  jsCommandLoaders.push({
+    name: "node",
+    load: async () => (await import("./js-exec/js-exec.js")).nodeStubCommand,
   });
 }
 

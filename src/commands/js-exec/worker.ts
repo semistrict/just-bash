@@ -1268,13 +1268,12 @@ async function executeCode(
           ) {
             return requestedName;
           }
-          // Normalize relative paths against the importing file's directory
-          const baseDir =
-            baseModuleName === "<eval>"
-              ? input.cwd
-              : baseModuleName.substring(0, baseModuleName.lastIndexOf("/")) ||
-                "/";
-          return resolveModulePath(requestedName, baseModuleName, baseDir);
+          // Normalize relative paths against the importing file's directory.
+          // For <eval> (inline code), pass undefined as fromFile so
+          // resolveModulePath uses input.cwd as the base directory.
+          const fromFile =
+            baseModuleName === "<eval>" ? undefined : baseModuleName;
+          return resolveModulePath(requestedName, fromFile, input.cwd);
         },
       );
     }

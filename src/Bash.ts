@@ -257,9 +257,10 @@ export interface ExecOptions {
    */
   signal?: AbortSignal;
   /**
-   * Arguments appended to the command's argument list at the interpreter level.
+   * Additional argv entries appended to the first executed command at the interpreter level.
    * Values bypass shell parsing entirely — no escaping, splitting, or globbing.
-   * Like child_process.spawnSync(cmd, args).
+   * Like child_process.spawnSync(cmd, args). These do not set or modify the shell's
+   * positional parameters ($1, $2, "$@", etc.).
    */
   args?: string[];
 }

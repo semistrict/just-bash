@@ -324,10 +324,13 @@ describe("README validation", () => {
         ...getJavaScriptCommandNames(),
       ]);
 
+      // Stub commands that redirect to other commands — not documented separately
+      const stubs = new Set(["node"]); // redirects to js-exec
+
       // Commands in registry but not in README
       const missingFromReadme: string[] = [];
       for (const cmd of registryCommands) {
-        if (!readmeCommands.has(cmd)) {
+        if (!readmeCommands.has(cmd) && !stubs.has(cmd)) {
           missingFromReadme.push(cmd);
         }
       }
@@ -387,10 +390,13 @@ describe("AGENTS.npm.md validation", () => {
         ...getJavaScriptCommandNames(),
       ]);
 
+      // Stub commands that redirect to other commands — not documented separately
+      const stubs = new Set(["node"]); // redirects to js-exec
+
       // Commands in registry but not in AGENTS.npm.md
       const missingFromAgents: string[] = [];
       for (const cmd of registryCommands) {
-        if (!agentsCommands.has(cmd)) {
+        if (!agentsCommands.has(cmd) && !stubs.has(cmd)) {
           missingFromAgents.push(cmd);
         }
       }

@@ -58,8 +58,9 @@ export interface CommandExecOptions {
    */
   signal?: AbortSignal;
   /**
-   * Arguments to the command, like child_process.spawnSync(cmd, args).
-   * Set as positional parameters ($1, $2, ...) without shell escaping.
+   * Additional argv entries appended to the first executed command.
+   * Values bypass shell parsing entirely — no escaping, splitting, or globbing.
+   * Like child_process.spawnSync(cmd, args).
    */
   args?: string[];
 }

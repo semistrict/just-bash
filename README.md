@@ -103,7 +103,7 @@ await env.exec("cat <<EOF\n  indented\nEOF", { rawScript: true });
 | `env` | `Record<string, string>` | Environment variables for this execution only |
 | `cwd` | `string` | Working directory for this execution only |
 | `stdin` | `string` | Standard input passed to the script |
-| `args` | `string[]` | Positional parameters ($1, $2, ...) without shell escaping |
+| `args` | `string[]` | Additional argv passed directly to the first command (bypasses shell parsing; does not change `$1`, `$2`, ...) |
 | `replaceEnv` | `boolean` | Start with empty env instead of merging (default: `false`) |
 | `signal` | `AbortSignal` | Cooperative cancellation; stops at next statement boundary |
 | `rawScript` | `boolean` | Skip leading-whitespace normalization (default: `false`) |

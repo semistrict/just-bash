@@ -411,10 +411,12 @@ async function executeJSInner(
     wrappedExec,
   );
 
-  const defaultTimeout = ctx.fetch
-    ? DEFAULT_JS_NETWORK_TIMEOUT_MS
-    : DEFAULT_JS_TIMEOUT_MS;
-  const timeoutMs = ctx.limits?.maxJsTimeoutMs ?? defaultTimeout;
+  // Network operations need a longer timeout. resolveLimits() always populates
+  // maxJsTimeoutMs (default 10s), so use the network default as a floor.
+  const userTimeout = ctx.limits?.maxJsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS;
+  const timeoutMs = ctx.fetch
+    ? Math.max(userTimeout, DEFAULT_JS_NETWORK_TIMEOUT_MS)
+    : userTimeout;
 
   const protocolToken = randomBytes(16).toString("hex");
 
@@ -582,5 +584,16 @@ export const jsExecCommand: Command = {
       isModule,
       stripTypes,
     );
+  },
+};
+
+export const nodeStubCommand: Command = {
+  name: "node",
+  async execute(): Promise<ExecResult> {
+    return {
+      stdout: "",
+      stderr: `node: this sandbox uses js-exec instead of node\n\n${JS_EXEC_HELP}`,
+      exitCode: 1,
+    };
   },
 };

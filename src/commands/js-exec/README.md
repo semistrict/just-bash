@@ -52,12 +52,12 @@ Available as a global, via `require('fs')`, or `import fs from 'node:fs'`.
 ```js
 const fs = require('node:fs');
 
-fs.readFileSync('/path/to/file')           // returns string
+fs.readFileSync('/path/to/file')           // returns Buffer (or string if encoding is provided)
 fs.writeFileSync('/path/to/file', 'data')
 fs.appendFileSync('/path/to/file', 'more')
 fs.copyFileSync('/src', '/dest')
 fs.renameSync('/old', '/new')
-fs.readFileBuffer('/path/to/file')         // returns number[] (raw bytes)
+fs.readFileBuffer('/path/to/file')         // returns ArrayBuffer (raw bytes)
 ```
 
 **Directories**
@@ -239,5 +239,5 @@ js-exec --strip-types -c "const x: number = 5; console.log(x)"
 ## Limits
 
 - **Memory**: 64 MB per execution
-- **Timeout**: 30 seconds (configurable via `maxJsTimeoutMs`)
+- **Timeout**: 10 seconds by default, or 60 seconds when network is enabled (configurable via `maxJsTimeoutMs`)
 - **Engine**: QuickJS (compiled to WebAssembly)

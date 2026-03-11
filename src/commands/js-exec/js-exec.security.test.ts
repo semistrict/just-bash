@@ -37,6 +37,24 @@ describe("js-exec security", () => {
     expect(result.stderr).toContain("command not found");
   });
 
+  it("should redirect node command to js-exec with help", async () => {
+    const env = new Bash({ javascript: true });
+    const result = await env.exec(`node -e "console.log('test')"`);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "this sandbox uses js-exec instead of node",
+    );
+    expect(result.stderr).toContain("js-exec -c");
+  });
+
+  it("should not have node command without javascript option", async () => {
+    const env = new Bash();
+    const result = await env.exec(`node -e "console.log('test')"`);
+    expect(result.exitCode).toBe(127);
+    expect(result.stderr).toContain("command not found");
+  });
+
   it("should isolate between executions", async () => {
     const env = new Bash({ javascript: true });
     // Set a global in first execution

@@ -393,10 +393,13 @@ async function executePython(
     ctx.limits?.maxOutputSize ?? 0,
   );
 
-  const defaultTimeout = ctx.fetch
-    ? DEFAULT_PYTHON_NETWORK_TIMEOUT_MS
-    : DEFAULT_PYTHON_TIMEOUT_MS;
-  const timeoutMs = ctx.limits?.maxPythonTimeoutMs ?? defaultTimeout;
+  // Network operations need a longer timeout. resolveLimits() always populates
+  // maxPythonTimeoutMs (default 10s), so use the network default as a floor.
+  const userTimeout =
+    ctx.limits?.maxPythonTimeoutMs ?? DEFAULT_PYTHON_TIMEOUT_MS;
+  const timeoutMs = ctx.fetch
+    ? Math.max(userTimeout, DEFAULT_PYTHON_NETWORK_TIMEOUT_MS)
+    : userTimeout;
   const queueState = getQueueState(ctx.fs);
 
   const workerInput: WorkerInput = {
