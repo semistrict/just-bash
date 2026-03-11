@@ -31,6 +31,7 @@ function makePipeFunc(funcName: string, args: AstNode[]): AstNode {
 /**
  * Map of moonblade function names to jq equivalents
  */
+// @banned-pattern-ignore: prototype nulled below; self-referential type prevents Object.assign pattern
 const FUNCTION_MAP: Record<string, string | ((args: AstNode[]) => AstNode)> = {
   // Arithmetic
   add: (args) => makeBinaryOp("+", args[0], args[1]),
@@ -260,6 +261,7 @@ const FUNCTION_MAP: Record<string, string | ((args: AstNode[]) => AstNode)> = {
   fmt: (args) => makeCall("tostring", args),
   format: (args) => makeCall("tostring", args),
 };
+// @banned-pattern-ignore: defense-in-depth null-prototype for static lookup table
 Object.setPrototypeOf(FUNCTION_MAP, null);
 
 function makeBinaryOp(

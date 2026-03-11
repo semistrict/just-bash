@@ -990,11 +990,9 @@ function setupContext(
 
   var _unsupported = Object.create(null);
   var _unsupportedRaw = ${JSON.stringify(UNSUPPORTED_MODULES)};
-  for (var _key in _unsupportedRaw) {
-    if (Object.prototype.hasOwnProperty.call(_unsupportedRaw, _key)) {
-      _unsupported[_key] = _unsupportedRaw[_key];
-    }
-  }
+  Object.keys(_unsupportedRaw).forEach(function(_key) {
+    _unsupported[_key] = _unsupportedRaw[_key];
+  });
 
   globalThis.require = function(name) {
     if (name.startsWith('node:')) name = name.slice(5);

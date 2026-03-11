@@ -213,6 +213,43 @@ When adding comparison tests:
 
 **In tests**: Pass `allowSymlinks: true` to the constructor when testing symlink behavior. The `cross-fs-no-symlinks.test.ts` file tests the default-deny behavior and O_NOFOLLOW TOCTOU protection.
 
+## Prototype Pollution Prevention
+
+All `Record<string, T>` objects must use null prototypes to prevent `__proto__` lookups from traversing the prototype chain. This is enforced by the banned-patterns linter (`pnpm lint:banned`).
+
+**For static lookup tables**, use `nullPrototype()` from `src/commands/query-engine/safe-object.ts`:
+
+```typescript
+import { nullPrototype } from "../query-engine/safe-object.js";
+const COLORS = nullPrototype<Record<string, string>>({ red: "#f00", blue: "#00f" });
+```
+
+**For empty accumulators**, use `Object.create(null)`:
+
+```typescript
+const map: Record<string, string> = Object.create(null);
+```
+
+**For bundled workers** (can't import safe-object), use inline pattern:
+
+```typescript
+const TABLE: Record<string, string> = Object.assign(
+  Object.create(null) as Record<string, string>,
+  { key: "value" },
+);
+```
+
+**For self-referential types** (where `Object.assign` breaks type inference), use `Object.setPrototypeOf` with a `@banned-pattern-ignore` comment:
+
+```typescript
+// @banned-pattern-ignore: prototype nulled below; self-referential type prevents Object.assign pattern
+const MAP: Record<string, Fn> = { ... };
+// @banned-pattern-ignore: defense-in-depth null-prototype for static lookup table
+Object.setPrototypeOf(MAP, null);
+```
+
+**Always guard bracket access** with `Object.hasOwn()` or use `nullPrototype` objects — never do `obj[userInput]` on a plain `{}`.
+
 ## Development Guidelines
 
 - Read AGENTS.md
