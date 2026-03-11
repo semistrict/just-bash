@@ -6,6 +6,7 @@
  */
 
 import { createUserRegex } from "../../regex/index.js";
+import { nullPrototype } from "../query-engine/safe-object.js";
 
 export interface FileType {
   extensions: string[];
@@ -16,8 +17,7 @@ export interface FileType {
  * Built-in file type definitions
  * Use `rg --type-list` to see all types in real ripgrep
  */
-// @banned-pattern-ignore: converted to Map in FileTypeRegistry constructor, never direct bracket access
-const FILE_TYPES: Record<string, FileType> = {
+const FILE_TYPES = nullPrototype<Record<string, FileType>>({
   // Web languages
   js: { extensions: [".js", ".mjs", ".cjs", ".jsx"], globs: [] },
   ts: { extensions: [".ts", ".tsx", ".mts", ".cts"], globs: [] },
@@ -89,7 +89,7 @@ const FILE_TYPES: Record<string, FileType> = {
     globs: ["Dockerfile", "Dockerfile.*", "*.dockerfile"],
   },
   tf: { extensions: [".tf", ".tfvars"], globs: [] },
-};
+});
 
 /**
  * Mutable file type registry for runtime type modifications

@@ -289,28 +289,30 @@ function createHOSTFS(
   FS: EmscriptenFS,
   PATH: EmscriptenPATH,
 ) {
-  // @banned-pattern-ignore: only accessed via dot notation with literal keys
-  const ERRNO_CODES: Record<string, number> = {
-    EPERM: 63,
-    ENOENT: 44,
-    EIO: 29,
-    EBADF: 8,
-    EAGAIN: 6,
-    EACCES: 2,
-    EBUSY: 10,
-    EEXIST: 20,
-    ENOTDIR: 54,
-    EISDIR: 31,
-    EINVAL: 28,
-    EMFILE: 33,
-    ENOSPC: 51,
-    ESPIPE: 70,
-    EROFS: 69,
-    ENOTEMPTY: 55,
-    ENOSYS: 52,
-    ENOTSUP: 138,
-    ENODATA: 42,
-  };
+  const ERRNO_CODES: Record<string, number> = Object.assign(
+    Object.create(null) as Record<string, number>,
+    {
+      EPERM: 63,
+      ENOENT: 44,
+      EIO: 29,
+      EBADF: 8,
+      EAGAIN: 6,
+      EACCES: 2,
+      EBUSY: 10,
+      EEXIST: 20,
+      ENOTDIR: 54,
+      EISDIR: 31,
+      EINVAL: 28,
+      EMFILE: 33,
+      ENOSPC: 51,
+      ESPIPE: 70,
+      EROFS: 69,
+      ENOTEMPTY: 55,
+      ENOSYS: 52,
+      ENOTSUP: 138,
+      ENODATA: 42,
+    },
+  );
 
   function realPath(node: EmscriptenNode): string {
     const parts: string[] = [];

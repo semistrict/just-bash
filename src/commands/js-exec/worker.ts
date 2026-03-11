@@ -184,9 +184,10 @@ function resolveModulePath(
  * Virtual built-in module sources.
  * These re-export globals set up by setupContext so they work with ESM imports.
  */
-// @banned-pattern-ignore: static keys only, never accessed with user input
-const VIRTUAL_MODULES: Record<string, string> = {
-  fs: `
+const VIRTUAL_MODULES: Record<string, string> = Object.assign(
+  Object.create(null) as Record<string, string>,
+  {
+    fs: `
     const _fs = globalThis.fs;
     export const readFile = _fs.readFile;
     export const readFileSync = function(path, opts) { return _fs.readFileSync(path, opts); };
@@ -226,7 +227,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const promises = _fs.promises;
     export default _fs;
   `,
-  path: `${PATH_MODULE_SOURCE}
+    path: `${PATH_MODULE_SOURCE}
     const _path = globalThis[Symbol.for('jb:path')];
     export const join = _path.join;
     export const resolve = _path.resolve;
@@ -243,7 +244,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const posix = _path.posix;
     export default _path;
   `,
-  process: `
+    process: `
     const _process = globalThis.process;
     export const argv = _process.argv;
     export const cwd = _process.cwd;
@@ -255,7 +256,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const version = _process.version;
     export default _process;
   `,
-  child_process: `
+    child_process: `
     const _exec = globalThis[Symbol.for('jb:exec')];
     const _execArgs = globalThis[Symbol.for('jb:execArgs')];
     export function execSync(cmd, opts) {
@@ -276,7 +277,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     }
     export default { exec: exec, execSync: execSync, spawnSync: spawnSync };
   `,
-  os: `
+    os: `
     const _os = globalThis[Symbol.for('jb:os')];
     export const platform = _os.platform;
     export const arch = _os.arch;
@@ -291,7 +292,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const endianness = _os.endianness;
     export default _os;
   `,
-  url: `
+    url: `
     const _url = globalThis[Symbol.for('jb:url')];
     export const URL = _url.URL;
     export const URLSearchParams = _url.URLSearchParams;
@@ -299,7 +300,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const format = _url.format;
     export default _url;
   `,
-  assert: `
+    assert: `
     const _assert = globalThis[Symbol.for('jb:assert')];
     export const ok = _assert.ok;
     export const equal = _assert.equal;
@@ -314,7 +315,7 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const fail = _assert.fail;
     export default _assert;
   `,
-  util: `
+    util: `
     const _util = globalThis[Symbol.for('jb:util')];
     export const format = _util.format;
     export const inspect = _util.inspect;
@@ -323,17 +324,17 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const inherits = _util.inherits;
     export default _util;
   `,
-  events: `
+    events: `
     const _events = globalThis[Symbol.for('jb:events')];
     export const EventEmitter = _events.EventEmitter;
     export default _events;
   `,
-  buffer: `
+    buffer: `
     const _buffer = globalThis[Symbol.for('jb:buffer')];
     export const Buffer = _buffer.Buffer;
     export default _buffer;
   `,
-  stream: `
+    stream: `
     const _stream = globalThis[Symbol.for('jb:stream')];
     export const Stream = _stream.Stream;
     export const Readable = _stream.Readable;
@@ -344,12 +345,12 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const pipeline = _stream.pipeline;
     export default _stream;
   `,
-  string_decoder: `
+    string_decoder: `
     const _sd = globalThis[Symbol.for('jb:string_decoder')];
     export const StringDecoder = _sd.StringDecoder;
     export default _sd;
   `,
-  querystring: `
+    querystring: `
     const _qs = globalThis[Symbol.for('jb:querystring')];
     export const parse = _qs.parse;
     export const stringify = _qs.stringify;
@@ -359,7 +360,8 @@ const VIRTUAL_MODULES: Record<string, string> = {
     export const encode = _qs.encode;
     export default _qs;
   `,
-};
+  },
+);
 
 // Add throw-at-import stubs for unsupported Node.js modules
 for (const [name, hint] of Object.entries(UNSUPPORTED_MODULES)) {
@@ -970,31 +972,39 @@ function setupContext(
     }
   };
 
-  var _modules = {
-    fs: _fs,
-    path: globalThis[Symbol.for('jb:path')],
-    child_process: _childProcess,
-    process: _p,
-    console: globalThis.console,
-    os: globalThis[Symbol.for('jb:os')],
-    url: globalThis[Symbol.for('jb:url')],
-    assert: globalThis[Symbol.for('jb:assert')],
-    util: globalThis[Symbol.for('jb:util')],
-    events: globalThis[Symbol.for('jb:events')],
-    buffer: globalThis[Symbol.for('jb:buffer')],
-    stream: globalThis[Symbol.for('jb:stream')],
-    string_decoder: globalThis[Symbol.for('jb:string_decoder')],
-    querystring: globalThis[Symbol.for('jb:querystring')]
-  };
+  var _modules = Object.create(null);
+  _modules.fs = _fs;
+  _modules.path = globalThis[Symbol.for('jb:path')];
+  _modules.child_process = _childProcess;
+  _modules.process = _p;
+  _modules.console = globalThis.console;
+  _modules.os = globalThis[Symbol.for('jb:os')];
+  _modules.url = globalThis[Symbol.for('jb:url')];
+  _modules.assert = globalThis[Symbol.for('jb:assert')];
+  _modules.util = globalThis[Symbol.for('jb:util')];
+  _modules.events = globalThis[Symbol.for('jb:events')];
+  _modules.buffer = globalThis[Symbol.for('jb:buffer')];
+  _modules.stream = globalThis[Symbol.for('jb:stream')];
+  _modules.string_decoder = globalThis[Symbol.for('jb:string_decoder')];
+  _modules.querystring = globalThis[Symbol.for('jb:querystring')];
 
-  var _unsupported = ${JSON.stringify(UNSUPPORTED_MODULES)};
+  var _unsupported = Object.create(null);
+  var _unsupportedRaw = ${JSON.stringify(UNSUPPORTED_MODULES)};
+  for (var _key in _unsupportedRaw) {
+    if (Object.prototype.hasOwnProperty.call(_unsupportedRaw, _key)) {
+      _unsupported[_key] = _unsupportedRaw[_key];
+    }
+  }
 
   globalThis.require = function(name) {
     if (name.startsWith('node:')) name = name.slice(5);
-    var mod = _modules[name];
-    if (mod) return mod;
-    var hint = _unsupported[name];
-    if (hint) throw new Error("Module '" + name + "' is not available in the js-exec sandbox. " + hint + " Run 'js-exec --help' for available modules.");
+    if (Object.prototype.hasOwnProperty.call(_modules, name)) {
+      return _modules[name];
+    }
+    if (Object.prototype.hasOwnProperty.call(_unsupported, name)) {
+      var hint = _unsupported[name];
+      throw new Error("Module '" + name + "' is not available in the js-exec sandbox. " + hint + " Run 'js-exec --help' for available modules.");
+    }
     throw new Error("Cannot find module '" + name + "'. Run 'js-exec --help' for available modules.");
   };
   globalThis.require.resolve = function(name) { return name; };
@@ -1235,8 +1245,9 @@ async function executeCode(
       runtime.setModuleLoader(
         (moduleName: string) => {
           // Check virtual built-in modules first
-          const virtualSource = VIRTUAL_MODULES[moduleName];
-          if (virtualSource) return virtualSource;
+          if (Object.hasOwn(VIRTUAL_MODULES, moduleName)) {
+            return VIRTUAL_MODULES[moduleName];
+          }
 
           // Resolve from VFS via sync backend
           try {

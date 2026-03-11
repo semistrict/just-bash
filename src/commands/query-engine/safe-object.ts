@@ -213,6 +213,20 @@ export function asQueryRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * Create a null-prototype object from a static lookup table literal.
+ * Use this to define Record/dictionary constants that are safe from
+ * prototype pollution (e.g., `__proto__` lookups return `undefined`).
+ *
+ * ```ts
+ * const COLORS = nullPrototype({ red: "#f00", blue: "#00f" });
+ * COLORS["__proto__"]  // undefined (no prototype chain)
+ * ```
+ */
+export function nullPrototype<T extends Record<string, unknown>>(obj: T): T {
+  return Object.assign(Object.create(null) as T, obj);
+}
+
+/**
  * Create a null-prototype shallow copy of an object.
  * This prevents prototype chain lookups without filtering any keys.
  */

@@ -106,8 +106,7 @@ async function loadFixtures(testFile: string): Promise<FixturesFile> {
     return fixtures;
   } catch {
     // No fixtures file yet
-    // @banned-pattern-ignore: test infrastructure, keys are fixture IDs from developer-controlled test files
-    const empty: FixturesFile = {};
+    const empty: FixturesFile = Object.create(null);
     fixturesCache.set(testFile, empty);
     return empty;
   }
@@ -165,8 +164,7 @@ export async function writeAllFixtures(): Promise<void> {
     await fs.mkdir(path.dirname(fixturesPath), { recursive: true });
 
     // Load existing fixtures and merge
-    // @banned-pattern-ignore: test infrastructure, keys are fixture IDs from developer-controlled test files
-    let existingFixtures: FixturesFile = {};
+    let existingFixtures: FixturesFile = Object.create(null);
     try {
       const content = await fs.readFile(fixturesPath, "utf-8");
       existingFixtures = JSON.parse(content) as FixturesFile;
@@ -187,8 +185,7 @@ export async function writeAllFixtures(): Promise<void> {
     }
 
     // Sort by fixture ID for consistent output
-    // @banned-pattern-ignore: test infrastructure, keys are fixture IDs from developer-controlled test files
-    const sortedFixtures: FixturesFile = {};
+    const sortedFixtures: FixturesFile = Object.create(null);
     for (const key of Object.keys(mergedFixtures).sort()) {
       sortedFixtures[key] = mergedFixtures[key];
     }
@@ -265,8 +262,7 @@ export async function setupFiles(
   }
 
   // Create equivalent BashEnv with normalized paths
-  // @banned-pattern-ignore: path.join() produces full paths like "/tmp/test/file", never "__proto__"
-  const bashEnvFiles: Record<string, string> = {};
+  const bashEnvFiles: Record<string, string> = Object.create(null);
   for (const [filePath, content] of Object.entries(files)) {
     bashEnvFiles[path.join(testDir, filePath)] = content;
   }
@@ -485,8 +481,8 @@ export async function compareOutputs(
     ? fileUrlToPath(testFileUrl)
     : getCallingTestFile();
   // Get files from registry if not provided
-  // @banned-pattern-ignore: test infrastructure with known file paths, not user data
-  const testFiles = files || setupFilesRegistry.get(testDir) || {};
+  const testFiles =
+    files || setupFilesRegistry.get(testDir) || Object.create(null);
   return compareOutputsInternal(
     env,
     testDir,

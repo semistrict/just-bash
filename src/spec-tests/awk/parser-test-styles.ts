@@ -86,7 +86,7 @@ export function tryParseBuiltinStyleTest(
   const fooNum = awkMatch[5];
 
   // Parse -v var=value options from flags
-  const vars: Record<string, string> = {};
+  const vars: Record<string, string> = Object.create(null);
   // Match both -v var=value and -vvar=value formats
   const varMatches = flagsStr.matchAll(/-v\s*(\w+)=([^\s]+)\s*/g);
   for (const match of varMatches) {

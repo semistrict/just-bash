@@ -214,13 +214,14 @@ export const ALL_KNOWN_FEATURES: readonly string[] = [
 ];
 
 /** Feature categories for reporting */
-export const FEATURE_CATEGORIES: Record<string, readonly string[]> = {
-  "bash:cmd": BASH_CMD_FEATURES,
-  "bash:builtin": BASH_BUILTIN_FEATURES,
-  "bash:expansion": BASH_EXPANSION_FEATURES,
-  "awk:stmt": AWK_STMT_FEATURES,
-  "awk:expr": AWK_EXPR_FEATURES,
-  "sed:cmd": SED_CMD_FEATURES,
-  "jq:node": JQ_NODE_FEATURES,
-  "cmd:flag": CMD_FLAG_FEATURES,
-};
+export const FEATURE_CATEGORIES: Record<string, readonly string[]> =
+  Object.assign(Object.create(null) as Record<string, readonly string[]>, {
+    "bash:cmd": BASH_CMD_FEATURES,
+    "bash:builtin": BASH_BUILTIN_FEATURES,
+    "bash:expansion": BASH_EXPANSION_FEATURES,
+    "awk:stmt": AWK_STMT_FEATURES,
+    "awk:expr": AWK_EXPR_FEATURES,
+    "sed:cmd": SED_CMD_FEATURES,
+    "jq:node": JQ_NODE_FEATURES,
+    "cmd:flag": CMD_FLAG_FEATURES,
+  });

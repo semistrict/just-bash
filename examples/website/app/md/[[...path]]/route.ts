@@ -6,14 +6,13 @@ import {
   FILE_WTF_IS_THIS,
 } from "../../components/terminal-content";
 
-// @banned-pattern-ignore: static keys only, never written with user input
-const FILES: Record<string, string> = {
+const FILES: Record<string, string> = Object.assign(Object.create(null), {
   "README.md": FILE_README,
   "LICENSE": FILE_LICENSE,
   "package.json": FILE_PACKAGE_JSON,
   "AGENTS.md": FILE_AGENTS_MD,
   "wtf-is-this.md": FILE_WTF_IS_THIS,
-};
+});
 
 export function generateStaticParams() {
   return [

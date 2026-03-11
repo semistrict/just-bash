@@ -36,9 +36,10 @@ export async function runSedTestCase(
   const skipReason = testCase.skip;
 
   // Create files object
-  const files: Record<string, string> = {
-    "/tmp/_keep": "",
-  };
+  const files: Record<string, string> = Object.assign(
+    Object.create(null) as Record<string, string>,
+    { "/tmp/_keep": "" },
+  );
 
   // Add input file if specified (even if empty, for tests that reference it)
   // Also create the file if the command references "input" (for empty file tests)

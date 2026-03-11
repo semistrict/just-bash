@@ -489,22 +489,15 @@ export class AwkParser {
         throw new Error("Invalid assignment target");
       }
 
-      const opMap: Record<
-        string,
-        "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "^="
-      > = {
-        "=": "=",
-        "+=": "+=",
-        "-=": "-=",
-        "*=": "*=",
-        "/=": "/=",
-        "%=": "%=",
-        "^=": "^=",
-      };
+      const VALID_OPS = new Set(["=", "+=", "-=", "*=", "/=", "%=", "^="]);
+      const op = opToken.value as string;
+      if (!VALID_OPS.has(op)) {
+        throw new Error(`Unknown assignment operator: ${op}`);
+      }
 
       return {
         type: "assignment",
-        operator: opMap[opToken.value as string],
+        operator: op as "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "^=",
         target: expr as AwkVariable | AwkFieldRef | AwkArrayAccess,
         value,
       };

@@ -6,6 +6,7 @@
  */
 
 import type { AstNode } from "../query-engine/parser.js";
+import { nullPrototype } from "../query-engine/safe-object.js";
 import type { MoonbladeExpr } from "./moonblade-parser.js";
 
 /**
@@ -30,7 +31,6 @@ function makePipeFunc(funcName: string, args: AstNode[]): AstNode {
 /**
  * Map of moonblade function names to jq equivalents
  */
-// @banned-pattern-ignore: accessed via Object.hasOwn() check in moonbladeToJq()
 const FUNCTION_MAP: Record<string, string | ((args: AstNode[]) => AstNode)> = {
   // Arithmetic
   add: (args) => makeBinaryOp("+", args[0], args[1]),
@@ -260,6 +260,7 @@ const FUNCTION_MAP: Record<string, string | ((args: AstNode[]) => AstNode)> = {
   fmt: (args) => makeCall("tostring", args),
   format: (args) => makeCall("tostring", args),
 };
+Object.setPrototypeOf(FUNCTION_MAP, null);
 
 function makeBinaryOp(
   op:
@@ -298,13 +299,12 @@ function makeCond(
   thenBranch: AstNode,
   elseBranch?: AstNode,
 ): AstNode {
-  // @banned-pattern-ignore: THEN_PROP is a constant "then", not user input
-  const node: Record<string, unknown> = {
+  const node = nullPrototype<Record<string, unknown>>({
     type: "Cond",
     cond,
     elifs: [],
     else: elseBranch || { type: "Literal", value: null },
-  };
+  });
   node[THEN_PROP] = thenBranch;
   return node as unknown as AstNode;
 }

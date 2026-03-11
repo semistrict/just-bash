@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isSafeKey,
   isSafeKeyStrict,
+  nullPrototype as np,
   safeAssign,
   safeCopy,
   safeDelete,
@@ -10,11 +11,6 @@ import {
   safeHasOwn,
   safeSet,
 } from "./safe-object.js";
-
-/** Helper: create a null-prototype object with the given properties. */
-function np<T extends Record<string, unknown>>(props: T): T {
-  return Object.assign(Object.create(null), props);
-}
 
 describe("safe-object utilities", () => {
   describe("isSafeKey", () => {
