@@ -403,6 +403,19 @@ const env = new Bash({
   },
 });
 
+// Inject credentials via header transforms (secrets never enter the sandbox)
+const env = new Bash({
+  network: {
+    allowedUrlPrefixes: [
+      "https://public-api.com", // plain string — no transforms
+      {
+        url: "https://ai-gateway.vercel.sh",
+        transform: [{ headers: { Authorization: "Bearer secret" } }],
+      },
+    ],
+  },
+});
+
 // Allow all URLs and methods (use with caution)
 const env = new Bash({
   network: { dangerouslyAllowFullInternetAccess: true },
@@ -505,6 +518,7 @@ The allow-list enforces:
 - **Path prefix**: Only paths starting with the specified prefix are allowed
 - **HTTP method restrictions**: Only GET and HEAD by default (configure `allowedMethods` for more)
 - **Redirect protection**: Redirects to non-allowed URLs are blocked
+- **Header transforms**: Firewall headers are injected at the fetch boundary and override any user-supplied headers with the same name, preventing credential substitution from inside the sandbox. Headers are re-evaluated on each redirect so credentials are never leaked to non-transform hosts
 
 ### Using curl
 
