@@ -33,6 +33,7 @@ import {
   preOpenOutputRedirects,
   processFdVariableRedirections,
 } from "./redirections.js";
+import { cloneStateForSubshell } from "./state-clone.js";
 import type { InterpreterContext } from "./types.js";
 
 /**
@@ -58,82 +59,11 @@ export async function executeSubshell(
     return preOpenError;
   }
 
-  const savedEnv = new Map(ctx.state.env);
-  const savedCwd = ctx.state.cwd;
-  // Save options so subshell changes (like set -e) don't affect parent
-  const savedOptions = { ...ctx.state.options };
-
-  // Save functions so subshell definitions don't leak to parent
-  // This is critical for proper subshell isolation - in real bash, function
-  // definitions inside (...) are isolated and don't affect the parent shell
-  // Note: Aliases are stored in env with BASH_ALIAS_ prefix, so they're
-  // already isolated via savedEnv
-  const savedFunctions = new Map(ctx.state.functions);
-
-  // Save local variable scoping state for subshell isolation
-  // Subshell gets a copy of these, but changes don't affect parent
-  const savedLocalScopes = ctx.state.localScopes;
-  const savedLocalVarStack = ctx.state.localVarStack;
-  const savedLocalVarDepth = ctx.state.localVarDepth;
-  const savedFullyUnsetLocals = ctx.state.fullyUnsetLocals;
-
-  // Deep copy the local scoping structures for the subshell
-  ctx.state.localScopes = savedLocalScopes.map((scope) => new Map(scope));
-  if (savedLocalVarStack) {
-    ctx.state.localVarStack = new Map();
-    for (const [name, stack] of savedLocalVarStack.entries()) {
-      ctx.state.localVarStack.set(
-        name,
-        stack.map((entry) => ({ ...entry })),
-      );
-    }
-  }
-  if (savedLocalVarDepth) {
-    ctx.state.localVarDepth = new Map(savedLocalVarDepth);
-  }
-  if (savedFullyUnsetLocals) {
-    ctx.state.fullyUnsetLocals = new Map(savedFullyUnsetLocals);
-  }
-
-  // Reset loopDepth in subshell - break/continue should not affect parent loops
-  const savedLoopDepth = ctx.state.loopDepth;
-  // Track if parent has loop context - break/continue in subshell should exit subshell
-  const savedParentHasLoopContext = ctx.state.parentHasLoopContext;
-  ctx.state.parentHasLoopContext = savedLoopDepth > 0;
-  ctx.state.loopDepth = 0;
-
-  // Save $_ (last argument) - subshell execution should not affect parent's $_
-  const savedLastArg = ctx.state.lastArg;
-
-  // Subshells get a new BASHPID (unlike $$ which stays the same)
-  const savedBashPid = ctx.state.bashPid;
-  ctx.state.bashPid = ctx.state.nextVirtualPid++;
-
-  // Save any existing groupStdin and set new one from pipeline
-  const savedGroupStdin = ctx.state.groupStdin;
-  if (stdin) {
-    ctx.state.groupStdin = stdin;
-  }
+  const { restore } = cloneStateForSubshell(ctx, stdin);
 
   let stdout = "";
   let stderr = "";
   let exitCode = 0;
-
-  const restore = (): void => {
-    ctx.state.env = savedEnv;
-    ctx.state.cwd = savedCwd;
-    ctx.state.options = savedOptions;
-    ctx.state.functions = savedFunctions;
-    ctx.state.localScopes = savedLocalScopes;
-    ctx.state.localVarStack = savedLocalVarStack;
-    ctx.state.localVarDepth = savedLocalVarDepth;
-    ctx.state.fullyUnsetLocals = savedFullyUnsetLocals;
-    ctx.state.loopDepth = savedLoopDepth;
-    ctx.state.parentHasLoopContext = savedParentHasLoopContext;
-    ctx.state.groupStdin = savedGroupStdin;
-    ctx.state.bashPid = savedBashPid;
-    ctx.state.lastArg = savedLastArg;
-  };
 
   try {
     for (const stmt of node.body) {

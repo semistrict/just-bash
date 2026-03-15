@@ -771,6 +771,10 @@ async function expandPart(
       // bash only prints verbose output for the main script
       const savedSuppressVerbose = ctx.state.suppressVerbose;
       ctx.state.suppressVerbose = true;
+      // Null out outputSink inside command substitutions —
+      // $() output is captured, not streamed to the caller.
+      const savedOutputSink = ctx.outputSink;
+      ctx.outputSink = undefined;
       try {
         const result = await ctx.executeScript(part.body);
         // Restore environment but preserve exit code
@@ -778,6 +782,7 @@ async function expandPart(
         ctx.state.env = savedEnv;
         ctx.state.cwd = savedCwd;
         ctx.state.suppressVerbose = savedSuppressVerbose;
+        ctx.outputSink = savedOutputSink;
         // Store the exit code for $?
         ctx.state.lastExitCode = exitCode;
         ctx.state.env.set("?", String(exitCode));
@@ -804,6 +809,7 @@ async function expandPart(
         ctx.state.bashPid = savedBashPid;
         ctx.substitutionDepth = savedDepth;
         ctx.state.suppressVerbose = savedSuppressVerbose;
+        ctx.outputSink = savedOutputSink;
         // ExecutionLimitError must always propagate - these are safety limits
         if (error instanceof ExecutionLimitError) {
           throw error;

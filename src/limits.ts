@@ -63,6 +63,9 @@ export interface ExecutionLimits {
 
   /** Maximum source/. nesting depth (default: 100) */
   maxSourceDepth?: number;
+
+  /** Maximum number of concurrent background jobs (default: 32) */
+  maxBackgroundJobs?: number;
 }
 
 /**
@@ -89,6 +92,7 @@ const DEFAULT_LIMITS: Required<ExecutionLimits> = {
   maxOutputSize: 10485760, // 10MB
   maxFileDescriptors: 1024,
   maxSourceDepth: 100,
+  maxBackgroundJobs: 32,
 };
 
 /**
@@ -133,5 +137,7 @@ export function resolveLimits(
     maxFileDescriptors:
       userLimits.maxFileDescriptors ?? DEFAULT_LIMITS.maxFileDescriptors,
     maxSourceDepth: userLimits.maxSourceDepth ?? DEFAULT_LIMITS.maxSourceDepth,
+    maxBackgroundJobs:
+      userLimits.maxBackgroundJobs ?? DEFAULT_LIMITS.maxBackgroundJobs,
   };
 }

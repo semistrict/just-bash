@@ -83,6 +83,13 @@ describe("custom-commands", () => {
         cwd: "/",
         env: new Map(),
         stdin: "",
+        writeStdout: () => {
+          throw new Error("writeStdout called in test");
+        },
+        writeStderr: () => {
+          throw new Error("writeStderr called in test");
+        },
+        stdinStream: (async function* () {})(),
       });
       expect(loadCount).toBe(1);
       expect(result1.stdout).toBe("lazy loaded\n");
@@ -93,6 +100,13 @@ describe("custom-commands", () => {
         cwd: "/",
         env: new Map(),
         stdin: "",
+        writeStdout: () => {
+          throw new Error("writeStdout called in test");
+        },
+        writeStderr: () => {
+          throw new Error("writeStderr called in test");
+        },
+        stdinStream: (async function* () {})(),
       });
       expect(loadCount).toBe(1);
       expect(result2.stdout).toBe("lazy loaded\n");

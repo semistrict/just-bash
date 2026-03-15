@@ -216,6 +216,17 @@ export class InMemoryFs implements IFileSystem {
     return textEncoder.encode(entry.content);
   }
 
+  // createReadStream: yields file content as a single chunk (already in memory).
+  // Real streaming benefit comes from disk-backed FS implementations.
+  createReadStream(path: string): AsyncIterable<string> {
+    const self = this;
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield await self.readFile(path, "binary");
+      },
+    };
+  }
+
   async writeFile(
     path: string,
     content: FileContent,
