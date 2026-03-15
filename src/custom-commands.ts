@@ -57,7 +57,7 @@ export function createLazyCustomCommand(lazy: LazyCommand): Command {
   return {
     name: lazy.name,
     trusted: true,
-    async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+    async execute(args, ctx) {
       if (!cached) {
         cached = await lazy.load();
       }

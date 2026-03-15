@@ -475,6 +475,52 @@ export class OverlayFs implements IFileSystem {
     }
   }
 
+  /**
+   * Pull-based streaming read. Yields string chunks on demand.
+   * Memory-layer files yield as one chunk; real-FS files stream from disk.
+   */
+  createReadStream(path: string, chunkSize = 65536): AsyncIterable<string> {
+    const self = this;
+    return {
+      async *[Symbol.asyncIterator]() {
+        validatePath(path, "open");
+        const normalized = normalizePath(path);
+
+        if (self.deleted.has(normalized)) {
+          throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+        }
+
+        // Memory layer (includes symlinks, lazy files, etc.):
+        // delegate to readFile which handles all cases, yield as one chunk.
+        if (self.memory.has(normalized)) {
+          yield await self.readFile(path, "binary");
+          return;
+        }
+
+        // Real filesystem: stream in chunks via FileHandle
+        const canonical = self.resolveRealPath_(self.toRealPath(normalized));
+        if (!canonical) {
+          throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+        }
+
+        const flags = self.allowSymlinks
+          ? fs.constants.O_RDONLY
+          : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+        const fh = await fs.promises.open(canonical, flags);
+        try {
+          const buf = Buffer.alloc(chunkSize);
+          for (;;) {
+            const { bytesRead } = await fh.read(buf, 0, chunkSize, null);
+            if (bytesRead === 0) break;
+            yield buf.toString("binary", 0, bytesRead);
+          }
+        } finally {
+          await fh.close();
+        }
+      },
+    };
+  }
+
   async writeFile(
     path: string,
     content: FileContent,

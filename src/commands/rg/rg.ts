@@ -85,6 +85,7 @@ EXAMPLES:
 
 export const rgCommand: Command = {
   name: "rg",
+  streaming: true,
 
   async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
     if (hasHelpFlag(args)) {

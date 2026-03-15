@@ -1,6 +1,5 @@
-import type { Command, CommandContext, ExecResult } from "../../types.js";
+import type { Command, CommandContext, CommandResult } from "../../types.js";
 import { parseArgs } from "../../utils/args.js";
-import { readFiles } from "../../utils/file-reader.js";
 import { hasHelpFlag, showHelp } from "../help.js";
 
 const catHelp = {
@@ -19,8 +18,9 @@ const argDefs = {
 
 export const catCommand: Command = {
   name: "cat",
+  streaming: true,
 
-  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  async execute(args, ctx) {
     if (hasHelpFlag(args)) {
       return showHelp(catHelp);
     }
@@ -31,41 +31,71 @@ export const catCommand: Command = {
     const showLineNumbers = parsed.result.flags.number;
     const files = parsed.result.positional;
 
-    // Read files (allows "-" for stdin)
-    const readResult = await readFiles(ctx, files, {
-      cmdName: "cat",
-      allowStdinMarker: true,
-      stopOnError: false,
-    });
-
-    let stdout = "";
-    let lineNumber = 1;
-
-    for (const { content } of readResult.files) {
-      if (showLineNumbers) {
-        // Real bash continues line numbers across files
-        const result = addLineNumbers(content, lineNumber);
-        stdout += result.content;
-        lineNumber = result.nextLineNumber;
-      } else {
-        stdout += content;
-      }
-    }
-
-    // Only use binary encoding when reading actual files (not just stdin).
-    // When reading from stdin (heredoc, here-string, pipeline text), the
-    // content may be Unicode text that needs UTF-8 encoding for file writes.
-    // File content is read with binary encoding and needs binary to preserve bytes.
-    const isReadingFiles = files.length > 0 && files.some((f) => f !== "-");
-    return {
-      stdout,
-      stderr: readResult.stderr,
-      exitCode: readResult.exitCode,
-      // @banned-pattern-ignore: spread into static result keys, no user-controlled properties
-      ...(isReadingFiles ? { stdoutEncoding: "binary" as const } : {}),
-    };
+    return streamingCat(ctx, files, showLineNumbers);
   },
 };
+
+/**
+ * Streaming cat: reads and writes incrementally.
+ * Each file's content (or stdin chunk) is pushed via writeStdout.
+ */
+async function streamingCat(
+  ctx: CommandContext,
+  files: string[],
+  showLineNumbers: boolean,
+): Promise<CommandResult> {
+  let stderr = "";
+  let exitCode = 0;
+  let lineNumber = 1;
+  let isReadingFiles = false;
+
+  async function writeContent(content: string): Promise<void> {
+    if (showLineNumbers) {
+      const numbered = addLineNumbers(content, lineNumber);
+      lineNumber = numbered.nextLineNumber;
+      await ctx.writeStdout(numbered.content);
+    } else {
+      await ctx.writeStdout(content);
+    }
+  }
+
+  async function drainStdin(): Promise<void> {
+    for await (const chunk of ctx.stdinStream) {
+      await writeContent(chunk);
+    }
+  }
+
+  if (files.length === 0) {
+    await drainStdin();
+  } else {
+    for (const file of files) {
+      if (file === "-") {
+        await drainStdin();
+      } else {
+        isReadingFiles = true;
+        try {
+          const filePath = ctx.fs.resolvePath(ctx.cwd, file);
+          // Pull-based streaming read. Only pulls the next chunk
+          // when the consumer asks, so `cat hugefile | head -n 1`
+          // reads minimal data from disk.
+          for await (const chunk of ctx.fs.createReadStream(filePath)) {
+            await writeContent(chunk);
+          }
+        } catch {
+          stderr += `cat: ${file}: No such file or directory\n`;
+          exitCode = 1;
+        }
+      }
+    }
+  }
+
+  return {
+    stderr,
+    exitCode,
+    // @banned-pattern-ignore: spread into static result keys, no user-controlled properties
+    ...(isReadingFiles ? { stdoutEncoding: "binary" as const } : {}),
+  };
+}
 
 function addLineNumbers(
   content: string,

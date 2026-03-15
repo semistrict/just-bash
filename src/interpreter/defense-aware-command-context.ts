@@ -157,6 +157,19 @@ function wrapFileSystem(
       component,
       "fs.utimes",
     ),
+    // createReadStream returns an AsyncIterable, not a Promise.
+    // Assert defense context on call; iteration inherits the context.
+    createReadStream: (
+      path: string,
+      chunkSize?: number,
+    ): AsyncIterable<string> => {
+      assertDefenseContext(
+        requireDefenseContext,
+        component,
+        "fs.createReadStream call",
+      );
+      return fs.createReadStream(path, chunkSize);
+    },
   };
 
   if (fs.readdirWithFileTypes) {

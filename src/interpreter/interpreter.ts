@@ -32,6 +32,7 @@ import {
   DefenseInDepthBox,
   SecurityViolationError,
 } from "../security/defense-in-depth-box.js";
+import { _setTimeout } from "../timers.js";
 import type {
   CommandRegistry,
   ExecResult,
@@ -90,19 +91,23 @@ import {
   parseRwFdContent,
 } from "./helpers/word-matching.js";
 import { traceSimpleCommand } from "./helpers/xtrace.js";
-import { executePipeline as executePipelineHelper } from "./pipeline-execution.js";
+import {
+  executePipeline as executePipelineHelper,
+  type StreamContext,
+} from "./pipeline-execution.js";
 import {
   applyRedirections,
   preOpenOutputRedirects,
   processFdVariableRedirections,
 } from "./redirections.js";
 import { processAssignments } from "./simple-command-assignments.js";
+import { snapshotStateForBackground } from "./state-clone.js";
 import {
   executeGroup as executeGroupHelper,
   executeSubshell as executeSubshellHelper,
   executeUserScript as executeUserScriptHelper,
 } from "./subshell-group.js";
-import type { InterpreterContext, InterpreterState } from "./types.js";
+import type { InterpreterContext, InterpreterState, Job } from "./types.js";
 
 export type { InterpreterContext, InterpreterState } from "./types.js";
 
@@ -134,6 +139,8 @@ export interface InterpreterOptions {
   requireDefenseContext?: boolean;
   /** Bootstrap JavaScript code for js-exec */
   jsBootstrapCode?: string;
+  /** Optional streaming output callback */
+  outputSink?: (chunk: { stdout: string; stderr: string }) => void;
 }
 
 export class Interpreter {
@@ -155,6 +162,7 @@ export class Interpreter {
       coverage: options.coverage,
       requireDefenseContext: options.requireDefenseContext ?? false,
       jsBootstrapCode: options.jsBootstrapCode,
+      outputSink: options.outputSink,
     };
   }
 
@@ -240,9 +248,16 @@ export class Interpreter {
 
     for (const statement of node.statements) {
       try {
-        const result = await this.executeStatement(statement);
-        appendOutput(result.stdout, result.stderr);
-        exitCode = result.exitCode;
+        const stmtResult = await this.executeStatement(statement);
+        // Stream output via sink (if configured and not in command substitution)
+        if (this.ctx.outputSink && (stmtResult.stdout || stmtResult.stderr)) {
+          this.ctx.outputSink({
+            stdout: stmtResult.stdout,
+            stderr: stmtResult.stderr,
+          });
+        }
+        appendOutput(stmtResult.stdout, stmtResult.stderr);
+        exitCode = stmtResult.exitCode;
         this.ctx.state.lastExitCode = exitCode;
         this.ctx.state.env.set("?", String(exitCode));
       } catch (error) {
@@ -346,6 +361,11 @@ export class Interpreter {
       }
     }
 
+    // Clean up remaining background jobs on script exit
+    const bgOutput = await this.cleanupBackgroundJobs();
+    stdout += bgOutput.stdout;
+    stderr += bgOutput.stderr;
+
     return {
       stdout,
       stderr,
@@ -375,6 +395,10 @@ export class Interpreter {
       throw new ExecutionAbortedError();
     }
 
+    // Drain completed background jobs — emit notifications before running
+    // the next foreground statement (like real bash).
+    const jobNotifications = this.drainCompletedJobs();
+
     this.ctx.state.commandCount++;
     if (this.ctx.state.commandCount > this.ctx.limits.maxCommandCount) {
       throwExecutionLimit(
@@ -396,12 +420,22 @@ export class Interpreter {
       return OK;
     }
 
+    // Background execution: run in a separate interpreter with cloned state
+    if (node.background) {
+      const bgResult = this.executeBackground(node);
+      return result(
+        jobNotifications.stdout + bgResult.stdout,
+        jobNotifications.stderr + bgResult.stderr,
+        bgResult.exitCode,
+      );
+    }
+
     // Reset errexitSafe at the start of each statement
     // It will be set by inner compound command executions if needed
     this.ctx.state.errexitSafe = false;
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = jobNotifications.stdout;
+    let stderr = jobNotifications.stderr;
 
     // verbose mode (set -v): print unevaluated source before execution
     // Don't print verbose output inside command substitutions (suppressVerbose flag)
@@ -423,10 +457,10 @@ export class Interpreter {
       if (operator === "&&" && exitCode !== 0) continue;
       if (operator === "||" && exitCode === 0) continue;
 
-      const result = await this.executePipeline(pipeline);
-      stdout += result.stdout;
-      stderr += result.stderr;
-      exitCode = result.exitCode;
+      const pipeResult = await this.executePipeline(pipeline);
+      stdout += pipeResult.stdout;
+      stderr += pipeResult.stderr;
+      exitCode = pipeResult.exitCode;
       lastExecutedIndex = i;
       lastPipelineNegated = pipeline.negated;
 
@@ -464,22 +498,215 @@ export class Interpreter {
     return result(stdout, stderr, exitCode);
   }
 
+  /**
+   * Run a statement in the background with cloned state.
+   * Returns immediately with the job notification on stderr.
+   */
+  private executeBackground(node: StatementNode): ExecResult {
+    const state = this.ctx.state;
+
+    // Enforce max background jobs limit
+    const jobTable = state.jobTable ?? new Map<number, Job>();
+    state.jobTable = jobTable;
+    const runningCount = [...jobTable.values()].filter(
+      (j) => j.status === "Running",
+    ).length;
+    if (runningCount >= this.ctx.limits.maxBackgroundJobs) {
+      return failure(
+        `bash: cannot create background job: limit of ${this.ctx.limits.maxBackgroundJobs} reached\n`,
+      );
+    }
+
+    // Assign PID and job ID
+    const pid = state.nextVirtualPid++;
+    const jobId = state.nextJobId ?? 1;
+    state.nextJobId = jobId + 1;
+
+    // Clone state for the background job
+    const bgState = snapshotStateForBackground(this.ctx);
+    const abortController = new AbortController();
+    bgState.signal = abortController.signal;
+
+    // Determine the command text for display
+    const commandText = node.sourceText?.replace(/\s*&\s*$/, "").trim() ?? "?";
+
+    // Create the job entry
+    const job: Job = {
+      jobId,
+      pid,
+      command: commandText,
+      status: "Running",
+      exitCode: 0,
+      promise: Promise.resolve(),
+      abortController,
+      notified: false,
+      stdout: "",
+      stderr: "",
+    };
+
+    // Create a new interpreter and start execution (unawaited)
+    const bgInterpreter = new Interpreter(
+      {
+        fs: this.ctx.fs,
+        commands: this.ctx.commands,
+        limits: this.ctx.limits,
+        exec: this.ctx.execFn,
+        fetch: this.ctx.fetch,
+        sleep: this.ctx.sleep,
+        trace: this.ctx.trace,
+        coverage: this.ctx.coverage,
+        // Background jobs run without defense context requirement
+        // since they share the same process
+        requireDefenseContext: false,
+        jsBootstrapCode: this.ctx.jsBootstrapCode,
+      },
+      bgState,
+    );
+
+    // Execute statement pipelines in background
+    job.promise = (async () => {
+      try {
+        // Execute each pipeline in the statement
+        let exitCode = 0;
+        for (let i = 0; i < node.pipelines.length; i++) {
+          const pipeline = node.pipelines[i];
+          const operator = i > 0 ? node.operators[i - 1] : null;
+          if (operator === "&&" && exitCode !== 0) continue;
+          if (operator === "||" && exitCode === 0) continue;
+          const res = await bgInterpreter.executePipeline(pipeline);
+          job.stdout += res.stdout;
+          job.stderr += res.stderr;
+          exitCode = res.exitCode;
+        }
+        job.exitCode = exitCode;
+        job.status = "Done";
+      } catch (error) {
+        if (error instanceof ExecutionAbortedError) {
+          job.stdout += error.stdout;
+          job.stderr += error.stderr;
+          job.status = "Terminated";
+          job.exitCode = 143; // SIGTERM
+        } else if (error instanceof ExitError) {
+          job.stdout += error.stdout;
+          job.stderr += error.stderr;
+          job.exitCode = error.exitCode;
+          job.status = "Done";
+        } else if (error instanceof ErrexitError) {
+          job.stdout += error.stdout;
+          job.stderr += error.stderr;
+          job.exitCode = error.exitCode;
+          job.status = "Done";
+        } else {
+          // Unknown error — mark as failed
+          job.exitCode = 1;
+          job.status = "Done";
+        }
+      }
+    })();
+
+    jobTable.set(jobId, job);
+
+    // Set $! to the background job's PID
+    state.lastBackgroundPid = pid;
+
+    // Return immediately — stderr has the job announcement
+    return result("", `[${jobId}] ${pid}\n`, 0);
+  }
+
+  /**
+   * Drain completed background jobs: collect notifications + output.
+   * Called at the start of each foreground statement execution.
+   * Does NOT delete jobs — they remain available for `wait` to query.
+   */
+  private drainCompletedJobs(): { stdout: string; stderr: string } {
+    const jobTable = this.ctx.state.jobTable;
+    if (!jobTable || jobTable.size === 0) {
+      return { stdout: "", stderr: "" };
+    }
+
+    let stdout = "";
+    let stderr = "";
+
+    for (const [, job] of jobTable) {
+      if (job.status !== "Running" && !job.notified) {
+        // Emit completion notification
+        stderr += `[${job.jobId}]+  ${job.status}                    ${job.command}\n`;
+        // Collect accumulated output
+        stdout += job.stdout;
+        stderr += job.stderr;
+        // Clear collected output to avoid duplication
+        job.stdout = "";
+        job.stderr = "";
+        job.notified = true;
+      }
+    }
+
+    return { stdout, stderr };
+  }
+
+  /**
+   * Abort + await all remaining background jobs when the script exits.
+   * Returns accumulated output from the jobs.
+   */
+  private async cleanupBackgroundJobs(): Promise<{
+    stdout: string;
+    stderr: string;
+  }> {
+    const jobTable = this.ctx.state.jobTable;
+    if (!jobTable || jobTable.size === 0) {
+      return { stdout: "", stderr: "" };
+    }
+
+    // Abort all still-running jobs
+    for (const [, job] of jobTable) {
+      if (job.status === "Running") {
+        job.abortController.abort();
+      }
+    }
+
+    // Await all promises with a timeout to prevent hanging on uncooperative
+    // sleep implementations (e.g., in tests with never-resolving sleeps).
+    const CLEANUP_TIMEOUT_MS = 100;
+    const timeout = new Promise<void>((resolve) => {
+      const timer = _setTimeout(resolve, CLEANUP_TIMEOUT_MS);
+      if (typeof timer === "object" && "unref" in timer) {
+        (timer as NodeJS.Timeout).unref();
+      }
+    });
+    await Promise.race([
+      Promise.all([...jobTable.values()].map((j) => j.promise)),
+      timeout,
+    ]);
+
+    // Collect output
+    let stdout = "";
+    let stderr = "";
+    for (const [, job] of jobTable) {
+      stdout += job.stdout;
+      stderr += job.stderr;
+    }
+
+    jobTable.clear();
+    return { stdout, stderr };
+  }
+
   private async executePipeline(node: PipelineNode): Promise<ExecResult> {
-    return executePipelineHelper(this.ctx, node, (cmd, stdin) =>
-      this.executeCommand(cmd, stdin),
+    return executePipelineHelper(this.ctx, node, (cmd, stdin, streamCtx) =>
+      this.executeCommand(cmd, stdin, streamCtx),
     );
   }
 
   private async executeCommand(
     node: CommandNode,
     stdin: string,
+    streamCtx?: StreamContext,
   ): Promise<ExecResult> {
     this.assertDefenseContext("command");
 
     this.ctx.coverage?.hit(`bash:cmd:${node.type}`);
     switch (node.type) {
       case "SimpleCommand":
-        return this.executeSimpleCommand(node, stdin);
+        return this.executeSimpleCommand(node, stdin, streamCtx);
       case "If":
         return executeIf(this.ctx, node);
       case "For":
@@ -510,9 +737,10 @@ export class Interpreter {
   private async executeSimpleCommand(
     node: SimpleCommandNode,
     stdin: string,
+    streamCtx?: StreamContext,
   ): Promise<ExecResult> {
     try {
-      return await this.executeSimpleCommandInner(node, stdin);
+      return await this.executeSimpleCommandInner(node, stdin, streamCtx);
     } catch (error) {
       if (error instanceof GlobError) {
         // GlobError from failglob should return exit code 1 with error message
@@ -527,6 +755,7 @@ export class Interpreter {
   private async executeSimpleCommandInner(
     node: SimpleCommandNode,
     stdin: string,
+    streamCtx?: StreamContext,
   ): Promise<ExecResult> {
     // Update currentLine for $LINENO
     if (node.line !== undefined) {
@@ -1043,6 +1272,7 @@ export class Interpreter {
         false,
         false,
         stdinSourceFd,
+        streamCtx,
       );
     } catch (error) {
       // For break/continue, we still need to apply redirections before propagating
@@ -1062,6 +1292,17 @@ export class Interpreter {
         ...cmdResult,
         stderr: stderrPrefix + cmdResult.stderr,
       };
+    }
+
+    // For the last pipeline stage, writeStdout collects into collectedStdout.
+    // Use it as the authoritative stdout (the command also returns the same
+    // data in ExecResult.stdout for standalone compatibility).
+    if (streamCtx?.collectedStdout != null) {
+      cmdResult = {
+        ...cmdResult,
+        stdout: streamCtx.collectedStdout,
+      };
+      streamCtx.collectedStdout = undefined;
     }
 
     cmdResult = await applyRedirections(this.ctx, cmdResult, node.redirections);
@@ -1151,6 +1392,7 @@ export class Interpreter {
     skipFunctions = false,
     useDefaultPath = false,
     stdinSourceFd = -1,
+    streamCtx?: StreamContext,
   ): Promise<ExecResult> {
     const dispatchCtx: BuiltinDispatchContext = {
       ctx: this.ctx,
@@ -1158,6 +1400,7 @@ export class Interpreter {
         this.runCommand(name, a, qa, s, sf, udp, ssf),
       buildExportedEnv: () => this.buildExportedEnv(),
       executeUserScript: (path, a, s) => this.executeUserScript(path, a, s),
+      streamCtx,
     };
 
     // Try builtin dispatch first

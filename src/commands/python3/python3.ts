@@ -16,7 +16,6 @@ import { Worker } from "node:worker_threads";
 import type { IFileSystem } from "../../fs/interface.js";
 import { sanitizeErrorMessage } from "../../fs/sanitize-error.js";
 import { mapToRecord } from "../../helpers/env.js";
-
 import { bindDefenseContextCallback } from "../../security/defense-context.js";
 import { DefenseInDepthBox } from "../../security/defense-in-depth-box.js";
 import { _clearTimeout, _setTimeout } from "../../timers.js";
@@ -495,10 +494,22 @@ async function executePython(
 
 export const python3Command: Command = {
   name: "python3",
+  streaming: true,
 
   async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
     if (hasHelpFlag(args)) {
       return showHelp(python3Help);
+    }
+
+    // Drain stdinStream into buffered stdin
+    {
+      let buffered = "";
+      for await (const chunk of ctx.stdinStream) {
+        buffered += chunk;
+      }
+      if (buffered) {
+        ctx = { ...ctx, stdin: buffered };
+      }
     }
 
     const parsed = parseArgs(args);
@@ -564,14 +575,24 @@ export const python3Command: Command = {
       };
     }
 
-    return executePython(pythonCode, ctx, scriptPath, parsed.scriptArgs);
+    const result = await executePython(
+      pythonCode,
+      ctx,
+      scriptPath,
+      parsed.scriptArgs,
+    );
+
+    if (result.stdout) await ctx.writeStdout(result.stdout);
+
+    return result;
   },
 };
 
 export const pythonCommand: Command = {
   name: "python",
+  streaming: true,
 
-  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  async execute(args, ctx) {
     return python3Command.execute(args, ctx);
   },
 };

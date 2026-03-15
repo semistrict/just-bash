@@ -12,7 +12,11 @@ import {
   DefenseInDepthBox,
   SecurityViolationError,
 } from "../security/defense-in-depth-box.js";
-import type { CommandContext, ExecResult } from "../types.js";
+import type {
+  CommandContext,
+  ExecResult,
+  ProcessTableEntry,
+} from "../types.js";
 import {
   handleBreak,
   handleCd,
@@ -53,12 +57,36 @@ import { callFunction } from "./functions.js";
 import { getErrorMessage } from "./helpers/errors.js";
 import { failure, OK, testResult } from "./helpers/result.js";
 import { SHELL_BUILTINS } from "./helpers/shell-constants.js";
+import { BrokenPipeError } from "./pipe-channel.js";
 import {
   findFirstInPath as findFirstInPathHelper,
   handleCommandV as handleCommandVHelper,
   handleType as handleTypeHelper,
 } from "./type-command.js";
 import type { InterpreterContext } from "./types.js";
+
+/** Wrap a buffered stdin string as a single-chunk async iterable. */
+function stdinToAsyncIterable(stdin: string): AsyncIterable<string> {
+  if (!stdin) {
+    return {
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.resolve({ value: undefined, done: true as const }),
+      }),
+    };
+  }
+  let consumed = false;
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: () => {
+        if (consumed) {
+          return Promise.resolve({ value: undefined, done: true as const });
+        }
+        consumed = true;
+        return Promise.resolve({ value: stdin, done: false as const });
+      },
+    }),
+  };
+}
 
 /**
  * Type for the function that runs a command recursively
@@ -95,6 +123,14 @@ export interface BuiltinDispatchContext {
   runCommand: RunCommandFn;
   buildExportedEnv: BuildExportedEnvFn;
   executeUserScript: ExecuteUserScriptFn;
+  /** Streaming context for the current pipeline stage (if any). */
+  streamCtx?: {
+    writeStdout: (chunk: string) => Promise<void>;
+    writeStderr: (chunk: string) => void;
+    stdinStream?: AsyncIterable<string>;
+    abortUpstream: () => void;
+    collectedStdout?: string;
+  };
 }
 
 /**
@@ -230,8 +266,28 @@ export async function dispatchBuiltin(
     return runCommand(cmd, rest, [], stdin, false, false, -1);
   }
   if (commandName === "wait") {
-    // wait - wait for background jobs (stub: no-op in this context)
-    return OK;
+    const { handleWait } = await import("./builtins/wait.js");
+    return handleWait(ctx, args);
+  }
+  if (commandName === "jobs") {
+    const { handleJobs } = await import("./builtins/jobs.js");
+    return handleJobs(ctx, args);
+  }
+  if (commandName === "kill") {
+    const { handleKill } = await import("./builtins/kill.js");
+    return handleKill(ctx, args);
+  }
+  if (commandName === "disown") {
+    const { handleDisown } = await import("./builtins/disown.js");
+    return handleDisown(ctx, args);
+  }
+  if (commandName === "fg") {
+    const { handleFg } = await import("./builtins/disown.js");
+    return handleFg();
+  }
+  if (commandName === "bg") {
+    const { handleBg } = await import("./builtins/disown.js");
+    return handleBg();
   }
   if (commandName === "type") {
     return await handleTypeHelper(
@@ -419,6 +475,19 @@ export async function executeExternalCommand(
   // Most builtins need access to the full env to modify state
   const exportedEnv = buildExportedEnv();
 
+  // Build process table from job table for `ps` command
+  let processTable: ProcessTableEntry[] | undefined;
+  if (ctx.state.jobTable && ctx.state.jobTable.size > 0) {
+    processTable = [];
+    for (const [, job] of ctx.state.jobTable) {
+      processTable.push({
+        pid: job.pid,
+        command: job.command,
+        status: job.status,
+      });
+    }
+  }
+
   const cmdCtx: CommandContext = {
     fs: ctx.fs,
     cwd: ctx.state.cwd,
@@ -437,11 +506,45 @@ export async function executeExternalCommand(
     signal: ctx.state.signal,
     requireDefenseContext: ctx.requireDefenseContext,
     jsBootstrapCode: ctx.jsBootstrapCode,
+    processTable,
+    // writeStdout/writeStderr are always set. In a pipeline, they come
+    // from StreamContext. For standalone streaming commands, we create
+    // local collectors. Non-streaming commands get a trap.
+    writeStdout:
+      dispatchCtx.streamCtx?.writeStdout ??
+      (cmd.streaming
+        ? async (chunk: string): Promise<void> => {
+            standaloneCollector.stdout += chunk;
+          }
+        : (): Promise<void> => {
+            throw new Error(
+              `${commandName}: writeStdout called on non-streaming command`,
+            );
+          }),
+    writeStderr:
+      dispatchCtx.streamCtx?.writeStderr ??
+      (cmd.streaming
+        ? (chunk: string): void => {
+            standaloneCollector.stderr += chunk;
+          }
+        : (): void => {
+            throw new Error(
+              `${commandName}: writeStderr called on non-streaming command`,
+            );
+          }),
+    stdinStream:
+      dispatchCtx.streamCtx?.stdinStream ??
+      stdinToAsyncIterable(effectiveStdin),
+    abortUpstream: dispatchCtx.streamCtx?.abortUpstream,
   };
+  // Collectors for standalone streaming commands (no pipeline context).
+  const standaloneCollector = { stdout: "", stderr: "" };
+  const isStandaloneStreaming = cmd.streaming && !dispatchCtx.streamCtx;
+
   const guardedCmdCtx = createDefenseAwareCommandContext(cmdCtx, commandName);
 
   try {
-    const runCommand = (): Promise<ExecResult> =>
+    const runCommand = () =>
       awaitWithDefenseContext(
         ctx.requireDefenseContext,
         "command",
@@ -449,11 +552,26 @@ export async function executeExternalCommand(
         () => cmd.execute(args, guardedCmdCtx),
       );
 
-    if (cmd.trusted) {
-      // Trusted host-extension commands may opt in to unrestricted globals.
-      return await DefenseInDepthBox.runTrustedAsync(() => runCommand());
-    }
-    return await runCommand();
+    const raw = cmd.trusted
+      ? await DefenseInDepthBox.runTrustedAsync(() => runCommand())
+      : await runCommand();
+
+    // Normalize CommandResult → ExecResult.
+    // Streaming commands return just { exitCode }; standalone collectors
+    // or pipeline collectedStdout fill in stdout/stderr.
+    const result: ExecResult = {
+      stdout: isStandaloneStreaming
+        ? standaloneCollector.stdout || raw.stdout || ""
+        : (raw.stdout ?? ""),
+      stderr: isStandaloneStreaming
+        ? standaloneCollector.stderr || raw.stderr || ""
+        : (raw.stderr ?? ""),
+      exitCode: raw.exitCode,
+      // @banned-pattern-ignore: spread from command result, only stdoutEncoding
+      ...(raw.stdoutEncoding ? { stdoutEncoding: raw.stdoutEncoding } : {}),
+    };
+
+    return result;
   } catch (error) {
     // ExecutionLimitError must propagate - these are safety limits
     if (error instanceof ExecutionLimitError) {
@@ -462,6 +580,11 @@ export async function executeExternalCommand(
     // Security violations must propagate to top-level error handling
     if (error instanceof SecurityViolationError) {
       throw error;
+    }
+    // BrokenPipeError = downstream aborted (SIGPIPE). Exit 141 (128+13).
+    // Commands don't need to catch this — the framework handles it.
+    if (error instanceof BrokenPipeError) {
+      return { stdout: "", stderr: "", exitCode: error.exitCode };
     }
     return failure(
       `${commandName}: ${sanitizeErrorMessage(getErrorMessage(error))}\n`,

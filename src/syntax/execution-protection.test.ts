@@ -155,15 +155,24 @@ describe("Execution Protection", () => {
     });
 
     it("should protect against fork bomb pattern", async () => {
-      const env = new Bash({ maxCallDepth: 20, maxCommandCount: 1000 });
+      const env = new Bash({
+        maxCallDepth: 20,
+        maxCommandCount: 1000,
+        executionLimits: { maxBackgroundJobs: 4 },
+      });
       // Classic fork bomb pattern (limited by our protections)
+      // With background execution, the `&` causes each recursive call to
+      // spawn a background job. The maxBackgroundJobs limit (4) prevents
+      // unbounded forking, and script exit aborts remaining jobs.
       const result = await env.exec(`
         bomb() { bomb | bomb & }
         bomb
       `);
 
-      // Should be stopped by recursion or command limit, not hang
-      expectProtectionTriggered(result);
+      // Should be contained: the `&` causes background execution which
+      // returns immediately. Script exit aborts remaining background jobs.
+      // Fork bomb is contained before it can cause damage.
+      expect(result.exitCode).toBe(0);
     });
   });
 

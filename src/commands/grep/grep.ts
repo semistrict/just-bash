@@ -1,5 +1,5 @@
 import type { UserRegex } from "../../regex/index.js";
-import type { Command, CommandContext, ExecResult } from "../../types.js";
+import type { Command, CommandContext } from "../../types.js";
 import { matchGlob } from "../../utils/glob.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 import { buildRegex, searchContent } from "../search-engine/index.js";
@@ -44,8 +44,9 @@ const grepHelp = {
 
 export const grepCommand: Command = {
   name: "grep",
+  streaming: true,
 
-  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  async execute(args, ctx) {
     if (hasHelpFlag(args)) {
       return showHelp(grepHelp);
     }
@@ -223,6 +224,17 @@ export const grepCommand: Command = {
       };
     }
 
+    // Drain stdinStream into buffered stdin
+    {
+      let buffered = "";
+      for await (const chunk of ctx.stdinStream) {
+        buffered += chunk;
+      }
+      if (buffered) {
+        ctx = { ...ctx, stdin: buffered };
+      }
+    }
+
     // If no files and stdin is provided (including empty string), read from stdin
     if (files.length === 0 && ctx.stdin !== undefined) {
       const result = searchContent(ctx.stdin, regex, {
@@ -239,11 +251,8 @@ export const grepCommand: Command = {
       if (quietMode) {
         return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
       }
-      return {
-        stdout: result.output,
-        stderr: "",
-        exitCode: result.matched ? 0 : 1,
-      };
+      if (result.output) await ctx.writeStdout(result.output);
+      return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
     }
 
     if (files.length === 0) {
@@ -421,6 +430,8 @@ export const grepCommand: Command = {
     if (quietMode) {
       return { stdout: "", stderr: "", exitCode };
     }
+
+    if (stdout) await ctx.writeStdout(stdout);
 
     return {
       stdout,
@@ -669,7 +680,7 @@ async function expandRecursiveWithTypes(
 export const fgrepCommand: Command = {
   name: "fgrep",
 
-  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  async execute(args, ctx) {
     // Insert -F at the beginning of args
     return grepCommand.execute(["-F", ...args], ctx);
   },
@@ -679,7 +690,7 @@ export const fgrepCommand: Command = {
 export const egrepCommand: Command = {
   name: "egrep",
 
-  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  async execute(args, ctx) {
     // Insert -E at the beginning of args
     return grepCommand.execute(["-E", ...args], ctx);
   },

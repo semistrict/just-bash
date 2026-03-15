@@ -1,4 +1,4 @@
-import type { Command, ExecResult } from "../../types.js";
+import type { Command, CommandContext, ExecResult } from "../../types.js";
 
 /**
  * seq - print a sequence of numbers
@@ -14,8 +14,9 @@ import type { Command, ExecResult } from "../../types.js";
  */
 export const seqCommand: Command = {
   name: "seq",
+  streaming: true,
 
-  async execute(args: string[]): Promise<ExecResult> {
+  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
     let separator = "\n";
     let equalizeWidth = false;
     const nums: string[] = [];
@@ -111,9 +112,6 @@ export const seqCommand: Command = {
       };
     }
 
-    // Generate sequence
-    const results: string[] = [];
-
     // Determine precision for floating point
     const getPrecision = (n: number): number => {
       const str = String(n);
@@ -127,43 +125,50 @@ export const seqCommand: Command = {
       getPrecision(last),
     );
 
-    // Limit iterations to prevent infinite loops
-    const maxIterations = 100000;
-    let iterations = 0;
+    const formatNum = (n: number): string =>
+      precision > 0 ? n.toFixed(precision) : String(Math.round(n));
+
+    // For -w, we need to know the widest number upfront
+    let padWidth = 0;
+    if (equalizeWidth) {
+      const firstStr = formatNum(first).replace("-", "");
+      const lastStr = formatNum(last).replace("-", "");
+      padWidth = Math.max(firstStr.length, lastStr.length);
+    }
+
+    const pad = (s: string): string => {
+      if (!equalizeWidth) return s;
+      const isNegative = s.startsWith("-");
+      const num = isNegative ? s.slice(1) : s;
+      const padded = num.padStart(padWidth, "0");
+      return isNegative ? `-${padded}` : padded;
+    };
+
+    // Stream numbers one at a time. No array, no accumulation, no limit.
+    // Backpressure from writeStdout naturally throttles generation.
+    // `seq 1 1000000000000 | head -n 5` emits 5 numbers instantly.
+    let isFirst = true;
 
     if (increment > 0) {
       for (let n = first; n <= last + 1e-10; n += increment) {
-        if (iterations++ > maxIterations) break;
-        results.push(
-          precision > 0 ? n.toFixed(precision) : String(Math.round(n)),
+        await ctx.writeStdout(
+          `${isFirst ? "" : separator}${pad(formatNum(n))}`,
         );
+        isFirst = false;
       }
     } else {
       for (let n = first; n >= last - 1e-10; n += increment) {
-        if (iterations++ > maxIterations) break;
-        results.push(
-          precision > 0 ? n.toFixed(precision) : String(Math.round(n)),
+        await ctx.writeStdout(
+          `${isFirst ? "" : separator}${pad(formatNum(n))}`,
         );
+        isFirst = false;
       }
     }
-
-    // Equalize width if requested
-    if (equalizeWidth && results.length > 0) {
-      const maxLen = Math.max(...results.map((r) => r.replace("-", "").length));
-      for (let j = 0; j < results.length; j++) {
-        const isNegative = results[j].startsWith("-");
-        const num = isNegative ? results[j].slice(1) : results[j];
-        const padded = num.padStart(maxLen, "0");
-        results[j] = isNegative ? `-${padded}` : padded;
-      }
+    if (!isFirst) {
+      await ctx.writeStdout("\n");
     }
 
-    const output = results.join(separator);
-    return {
-      stdout: output ? `${output}\n` : "",
-      stderr: "",
-      exitCode: 0,
-    };
+    return { stdout: "", stderr: "", exitCode: 0 };
   },
 };
 

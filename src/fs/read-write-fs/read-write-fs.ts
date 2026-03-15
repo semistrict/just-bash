@@ -177,6 +177,35 @@ export class ReadWriteFs implements IFileSystem {
     }
   }
 
+  /**
+   * Pull-based streaming read. Yields string chunks from disk on demand.
+   */
+  createReadStream(path: string, chunkSize = 65536): AsyncIterable<string> {
+    const self = this;
+    return {
+      async *[Symbol.asyncIterator]() {
+        validatePath(path, "open");
+        const realPath = self.toRealPath(path);
+        const canonical = self.resolveAndValidate(realPath, path);
+
+        const flags = self.allowSymlinks
+          ? fs.constants.O_RDONLY
+          : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+        const fh = await fs.promises.open(canonical, flags);
+        try {
+          const buf = Buffer.alloc(chunkSize);
+          for (;;) {
+            const { bytesRead } = await fh.read(buf, 0, chunkSize, null);
+            if (bytesRead === 0) break;
+            yield buf.toString("binary", 0, bytesRead);
+          }
+        } finally {
+          await fh.close();
+        }
+      },
+    };
+  }
+
   async writeFile(
     path: string,
     content: FileContent,

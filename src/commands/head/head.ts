@@ -21,6 +21,7 @@ const headHelp = {
 
 export const headCommand: Command = {
   name: "head",
+  streaming: true,
 
   async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
     if (hasHelpFlag(args)) {
@@ -32,13 +33,91 @@ export const headCommand: Command = {
       return parsed.error;
     }
 
-    const { lines, bytes } = parsed.options;
+    const { lines, bytes, files } = parsed.options;
 
-    return processHeadTailFiles(ctx, parsed.options, "head", (content) =>
-      getHead(content, lines, bytes),
+    // Streaming path: read stdin incrementally, abort upstream when done
+    if (files.length === 0 && bytes === null) {
+      return streamingHead(ctx, lines);
+    }
+
+    // Drain stdinStream into buffered stdin for non-streaming cases
+    // (byte mode or file args)
+    {
+      let buffered = "";
+      for await (const chunk of ctx.stdinStream) {
+        buffered += chunk;
+      }
+      if (buffered) {
+        ctx = { ...ctx, stdin: buffered };
+      }
+    }
+
+    const result = await processHeadTailFiles(
+      ctx,
+      parsed.options,
+      "head",
+      (content) => getHead(content, lines, bytes),
     );
+
+    if (result.stdout) await ctx.writeStdout(result.stdout);
+
+    return result;
   },
 };
+
+/**
+ * Streaming head: reads stdin chunks incrementally, counts lines,
+ * emits output via writeStdout, and aborts upstream when done.
+ */
+async function streamingHead(
+  ctx: CommandContext,
+  targetLines: number,
+): Promise<ExecResult> {
+  if (targetLines === 0) {
+    ctx.abortUpstream?.();
+    return { stdout: "", stderr: "", exitCode: 0 };
+  }
+
+  const stdinStream = ctx.stdinStream;
+  const write = ctx.writeStdout;
+  let lineCount = 0;
+  let partial = ""; // Leftover partial line from previous chunk
+
+  for await (const chunk of stdinStream) {
+    const data = partial + chunk;
+    partial = "";
+
+    let pos = 0;
+    while (pos < data.length && lineCount < targetLines) {
+      const nlIdx = data.indexOf("\n", pos);
+      if (nlIdx === -1) {
+        // No more newlines — save the rest as partial
+        partial = data.slice(pos);
+        break;
+      }
+      lineCount++;
+      if (lineCount >= targetLines) {
+        // Emit everything from start up to and including this newline
+        await write(data.slice(0, nlIdx + 1));
+        ctx.abortUpstream?.();
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      pos = nlIdx + 1;
+    }
+
+    // Emit all complete lines in this chunk
+    if (pos > 0) {
+      await write(data.slice(0, pos));
+    }
+  }
+
+  // Stream ended — emit any remaining partial line
+  if (partial && lineCount < targetLines) {
+    await write(`${partial}\n`);
+  }
+
+  return { stdout: "", stderr: "", exitCode: 0 };
+}
 
 import type { CommandFuzzInfo } from "../fuzz-flags-types.js";
 

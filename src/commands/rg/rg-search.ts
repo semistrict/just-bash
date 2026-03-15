@@ -57,7 +57,19 @@ export interface SearchContext {
 export async function executeSearch(
   searchCtx: SearchContext,
 ): Promise<ExecResult> {
-  const { ctx, options, paths: inputPaths, explicitLineNumbers } = searchCtx;
+  let { ctx } = searchCtx;
+  const { options, paths: inputPaths, explicitLineNumbers } = searchCtx;
+
+  // Drain stdinStream into buffered stdin
+  {
+    let buffered = "";
+    for await (const chunk of ctx.stdinStream) {
+      buffered += chunk;
+    }
+    if (buffered) {
+      ctx = { ...ctx, stdin: buffered };
+    }
+  }
 
   // Validate glob patterns for errors
   for (const glob of options.globs) {
@@ -113,6 +125,11 @@ export async function executeSearch(
       stderr: "rg: no pattern given\n",
       exitCode: 2,
     };
+  }
+
+  // When no paths given and stdin is available, search stdin
+  if (inputPaths.length === 0 && ctx.stdin) {
+    return searchStdin(ctx, patterns, options, explicitLineNumbers);
   }
 
   // Default to current directory
@@ -199,6 +216,73 @@ export async function executeSearch(
     effectiveLineNumbers,
     kResetGroup,
   );
+}
+
+/**
+ * Search stdin content with streaming support.
+ */
+async function searchStdin(
+  ctx: CommandContext,
+  patterns: string[],
+  options: RgOptions,
+  explicitLineNumbers: boolean,
+): Promise<ExecResult> {
+  // stdinStream already drained by executeSearch
+  const stdinContent = ctx.stdin;
+  // rg doesn't show line numbers for stdin unless explicitly requested
+  const showLineNumbers = explicitLineNumbers && options.lineNumber;
+
+  const effectiveIgnoreCase = determineIgnoreCase(options, patterns);
+  let regex: UserRegex;
+  let kResetGroup: number | undefined;
+  try {
+    const regexResult = buildSearchRegex(
+      patterns,
+      options,
+      effectiveIgnoreCase,
+    );
+    regex = regexResult.regex;
+    kResetGroup = regexResult.kResetGroup;
+  } catch {
+    return {
+      stdout: "",
+      stderr: `rg: invalid regex: ${patterns.join(", ")}\n`,
+      exitCode: 2,
+    };
+  }
+
+  const result = searchContent(stdinContent, regex, {
+    invertMatch: options.invertMatch,
+    showLineNumbers,
+    countOnly: options.count,
+    countMatches: options.countMatches,
+    filename: "",
+    onlyMatching: options.onlyMatching,
+    beforeContext: options.beforeContext,
+    afterContext: options.afterContext,
+    maxCount: options.maxCount,
+    contextSeparator: options.contextSeparator,
+    showColumn: options.column,
+    vimgrep: options.vimgrep,
+    showByteOffset: options.byteOffset,
+    replace:
+      options.replace !== null ? convertReplacement(options.replace) : null,
+    passthru: options.passthru,
+    multiline: options.multiline,
+    kResetGroup,
+  });
+
+  if (options.quiet) {
+    return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
+  }
+
+  if (result.output) await ctx.writeStdout(result.output);
+
+  return {
+    stdout: result.output,
+    stderr: "",
+    exitCode: result.matched ? 0 : 1,
+  };
 }
 
 /**
@@ -1003,6 +1087,8 @@ async function searchFiles(
   } else {
     exitCode = anyMatch ? 0 : 1;
   }
+
+  if (finalStdout) await ctx.writeStdout(finalStdout);
 
   return {
     stdout: finalStdout,
