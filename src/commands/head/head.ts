@@ -59,7 +59,10 @@ export const headCommand: Command = {
       (content) => getHead(content, lines, bytes),
     );
 
-    if (result.stdout) await ctx.writeStdout(result.stdout);
+    if (result.stdout) {
+      await ctx.writeStdout(result.stdout);
+      return { stdout: "", stderr: result.stderr, exitCode: result.exitCode };
+    }
 
     return result;
   },

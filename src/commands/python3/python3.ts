@@ -582,7 +582,10 @@ export const python3Command: Command = {
       parsed.scriptArgs,
     );
 
-    if (result.stdout) await ctx.writeStdout(result.stdout);
+    if (result.stdout) {
+      await ctx.writeStdout(result.stdout);
+      return { ...result, stdout: "" };
+    }
 
     return result;
   },

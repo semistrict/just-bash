@@ -431,13 +431,12 @@ export const grepCommand: Command = {
       return { stdout: "", stderr: "", exitCode };
     }
 
-    if (stdout) await ctx.writeStdout(stdout);
+    if (stdout) {
+      await ctx.writeStdout(stdout);
+      return { stdout: "", stderr, exitCode };
+    }
 
-    return {
-      stdout,
-      stderr,
-      exitCode,
-    };
+    return { stdout: "", stderr, exitCode };
   },
 };
 
