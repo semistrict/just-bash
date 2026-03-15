@@ -180,8 +180,13 @@ export class ReadWriteFs implements IFileSystem {
   /**
    * Pull-based streaming read. Yields string chunks from disk on demand.
    */
-  createReadStream(path: string, chunkSize = 65536): AsyncIterable<string> {
+  createReadStream(
+    path: string,
+    options?: { chunkSize?: number; encoding?: "binary" },
+  ): AsyncIterable<string> {
     const self = this;
+    const chunkSize = options?.chunkSize ?? 65536;
+    const encoding = options?.encoding ?? "utf8";
     return {
       async *[Symbol.asyncIterator]() {
         validatePath(path, "open");
@@ -197,7 +202,7 @@ export class ReadWriteFs implements IFileSystem {
           for (;;) {
             const { bytesRead } = await fh.read(buf, 0, chunkSize, null);
             if (bytesRead === 0) break;
-            yield buf.toString("binary", 0, bytesRead);
+            yield buf.toString(encoding, 0, bytesRead);
           }
         } finally {
           await fh.close();

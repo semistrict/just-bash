@@ -269,10 +269,15 @@ export interface IFileSystem {
    * the content as a single chunk.
    *
    * @param path - Absolute file path
-   * @param chunkSize - Hint for chunk size in bytes (default: 64 KiB)
+   * @param options - Stream options
+   * @param options.chunkSize - Hint for chunk size in bytes (default: 64 KiB)
+   * @param options.encoding - "binary" for raw bytes as latin1, undefined for UTF-8 (default)
    * @throws Error if file doesn't exist or is a directory
    */
-  createReadStream(path: string, chunkSize?: number): AsyncIterable<string>;
+  createReadStream(
+    path: string,
+    options?: { chunkSize?: number; encoding?: "binary" },
+  ): AsyncIterable<string>;
 }
 
 /**

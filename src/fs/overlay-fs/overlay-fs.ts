@@ -479,8 +479,13 @@ export class OverlayFs implements IFileSystem {
    * Pull-based streaming read. Yields string chunks on demand.
    * Memory-layer files yield as one chunk; real-FS files stream from disk.
    */
-  createReadStream(path: string, chunkSize = 65536): AsyncIterable<string> {
+  createReadStream(
+    path: string,
+    options?: { chunkSize?: number; encoding?: "binary" },
+  ): AsyncIterable<string> {
     const self = this;
+    const chunkSize = options?.chunkSize ?? 65536;
+    const encoding = options?.encoding ?? "utf8";
     return {
       async *[Symbol.asyncIterator]() {
         validatePath(path, "open");
@@ -493,7 +498,7 @@ export class OverlayFs implements IFileSystem {
         // Memory layer (includes symlinks, lazy files, etc.):
         // delegate to readFile which handles all cases, yield as one chunk.
         if (self.memory.has(normalized)) {
-          yield await self.readFile(path, "binary");
+          yield await self.readFile(path, encoding);
           return;
         }
 
@@ -512,7 +517,7 @@ export class OverlayFs implements IFileSystem {
           for (;;) {
             const { bytesRead } = await fh.read(buf, 0, chunkSize, null);
             if (bytesRead === 0) break;
-            yield buf.toString("binary", 0, bytesRead);
+            yield buf.toString(encoding, 0, bytesRead);
           }
         } finally {
           await fh.close();

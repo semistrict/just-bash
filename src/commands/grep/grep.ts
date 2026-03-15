@@ -1,8 +1,9 @@
 import type { UserRegex } from "../../regex/index.js";
 import type { Command, CommandContext } from "../../types.js";
 import { matchGlob } from "../../utils/glob.js";
+import { lineStream } from "../../utils/line-stream.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
-import { buildRegex, searchContent } from "../search-engine/index.js";
+import { buildRegex, searchStream } from "../search-engine/index.js";
 
 /** File entry with optional type info from glob expansion */
 interface FileEntry {
@@ -224,55 +225,46 @@ export const grepCommand: Command = {
       };
     }
 
-    // Drain stdinStream into buffered stdin
-    {
-      let buffered = "";
-      for await (const chunk of ctx.stdinStream) {
-        buffered += chunk;
-      }
-      if (buffered) {
-        ctx = { ...ctx, stdin: buffered };
-      }
-    }
+    // Shared search options
+    const searchOpts = {
+      invertMatch,
+      showLineNumbers,
+      countOnly,
+      onlyMatching,
+      beforeContext,
+      afterContext,
+      maxCount,
+      kResetGroup,
+      write: ctx.writeStdout,
+    };
 
-    // If no files and stdin is provided (including empty string), read from stdin
-    if (files.length === 0 && ctx.stdin !== undefined) {
-      const result = searchContent(ctx.stdin, regex, {
-        invertMatch,
-        showLineNumbers,
-        countOnly,
-        filename: "",
-        onlyMatching,
-        beforeContext,
-        afterContext,
-        maxCount,
-        kResetGroup,
-      });
-      if (quietMode) {
-        return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
-      }
-      if (result.output) await ctx.writeStdout(result.output);
-      return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
-    }
-
+    // Stdin path: no files specified
     if (files.length === 0) {
-      return {
-        stdout: "",
-        stderr: "grep: no input files\n",
-        exitCode: 2,
-      };
+      if (quietMode) {
+        // Quiet mode: just check for match, no output
+        const result = await searchStream(lineStream(ctx.stdinStream), regex, {
+          ...searchOpts,
+          maxCount: 1,
+          countOnly: true,
+          filename: "",
+          write: async () => {},
+        });
+        return { exitCode: result.matched ? 0 : 1 };
+      }
+      const result = await searchStream(lineStream(ctx.stdinStream), regex, {
+        ...searchOpts,
+        filename: "",
+      });
+      return { exitCode: result.matched ? 0 : 1 };
     }
 
-    let stdout = "";
-    let stderr = "";
     let anyMatch = false;
+    let anyNonMatch = false;
     let anyError = false;
 
     // Collect all files to search (expand globs first)
-    // FileEntry includes type info when available to skip stat calls
     const filesToSearch: FileEntry[] = [];
     for (const file of files) {
-      // Check if this is a glob pattern
       if (file.includes("*") || file.includes("?") || file.includes("[")) {
         const expanded = await expandGlobPatternWithTypes(file, ctx);
         if (recursive) {
@@ -304,139 +296,105 @@ export const grepCommand: Command = {
       }
     }
 
-    // Determine if we should show filename (after glob expansion)
     const showFilename = (filesToSearch.length > 1 || recursive) && !noFilename;
 
-    // Process files in parallel batches for better performance
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
-      const batch = filesToSearch.slice(i, i + BATCH_SIZE);
+    for (const fileEntry of filesToSearch) {
+      const file = fileEntry.path;
+      const basename = file.split("/").pop() || file;
 
-      // Process batch in parallel
-      const results = await Promise.all(
-        batch.map(async (fileEntry) => {
-          const file = fileEntry.path;
-          const basename = file.split("/").pop() || file;
+      // Check exclude patterns for non-recursive case
+      if (excludePatterns.length > 0 && !recursive) {
+        if (
+          excludePatterns.some((p) =>
+            matchGlob(basename, p, { stripQuotes: true }),
+          )
+        ) {
+          continue;
+        }
+      }
 
-          // Check exclude patterns for non-recursive case
-          if (excludePatterns.length > 0 && !recursive) {
-            if (
-              excludePatterns.some((p) =>
-                matchGlob(basename, p, { stripQuotes: true }),
-              )
-            ) {
-              return null;
-            }
-          }
+      // Check include patterns for non-recursive case
+      if (includePatterns.length > 0 && !recursive) {
+        if (
+          !includePatterns.some((p) =>
+            matchGlob(basename, p, { stripQuotes: true }),
+          )
+        ) {
+          continue;
+        }
+      }
 
-          // Check include patterns for non-recursive case
-          if (includePatterns.length > 0 && !recursive) {
-            if (
-              !includePatterns.some((p) =>
-                matchGlob(basename, p, { stripQuotes: true }),
-              )
-            ) {
-              return null;
-            }
-          }
+      let filePath: string;
+      try {
+        filePath = ctx.fs.resolvePath(ctx.cwd, file);
 
-          try {
-            const filePath = ctx.fs.resolvePath(ctx.cwd, file);
+        let isDirectory = false;
+        if (fileEntry.isFile === undefined) {
+          const stat = await ctx.fs.stat(filePath);
+          isDirectory = stat.isDirectory;
+        } else {
+          isDirectory = !fileEntry.isFile;
+        }
 
-            // Skip stat if we already know it's a file from glob expansion
-            let isDirectory = false;
-            if (fileEntry.isFile === undefined) {
-              const stat = await ctx.fs.stat(filePath);
-              isDirectory = stat.isDirectory;
-            } else {
-              isDirectory = !fileEntry.isFile;
-            }
-
-            if (isDirectory) {
-              if (!recursive) {
-                return { error: `grep: ${file}: Is a directory\n` };
-              }
-              return null;
-            }
-
-            const content = await ctx.fs.readFile(filePath);
-            const result = searchContent(content, regex, {
-              invertMatch,
-              showLineNumbers,
-              countOnly,
-              filename: showFilename ? file : "",
-              onlyMatching,
-              beforeContext,
-              afterContext,
-              maxCount,
-              kResetGroup,
-            });
-
-            return { file, result };
-          } catch {
-            return { error: `grep: ${file}: No such file or directory\n` };
-          }
-        }),
-      );
-
-      // Process results from batch
-      for (const res of results) {
-        if (res === null) continue;
-
-        if ("error" in res && res.error) {
-          stderr += res.error;
-          if (!res.error.includes("Is a directory")) {
-            anyError = true;
+        if (isDirectory) {
+          if (!recursive) {
+            ctx.writeStderr(`grep: ${file}: Is a directory\n`);
           }
           continue;
         }
+      } catch {
+        ctx.writeStderr(`grep: ${file}: No such file or directory\n`);
+        anyError = true;
+        continue;
+      }
 
-        if (!("file" in res) || !res.result) continue;
+      // Stream file content through lineStream → searchStream
+      const fileLines = lineStream(ctx.fs.createReadStream(filePath));
+      const filename = showFilename ? file : "";
 
-        const { file, result } = res;
+      if (filesWithMatches || filesWithoutMatch || quietMode) {
+        // These modes only care about whether there was a match,
+        // not the output — use count mode to avoid formatting overhead
+        const result = await searchStream(fileLines, regex, {
+          ...searchOpts,
+          countOnly: true,
+          filename: "",
+          write: async () => {},
+        });
+
         if (result.matched) {
           anyMatch = true;
           if (quietMode) {
-            // In quiet mode, exit immediately on first match
-            return { stdout: "", stderr: "", exitCode: 0 };
+            return { exitCode: 0 };
           }
           if (filesWithMatches) {
-            stdout += `${file}\n`;
-          } else if (!filesWithoutMatch) {
-            stdout += result.output;
+            await ctx.writeStdout(`${file}\n`);
           }
-        } else {
-          // No match in this file
-          if (filesWithoutMatch) {
-            stdout += `${file}\n`;
-          } else if (countOnly && !filesWithMatches) {
-            stdout += result.output;
-          }
+        } else if (filesWithoutMatch) {
+          anyNonMatch = true;
+          await ctx.writeStdout(`${file}\n`);
+        }
+      } else {
+        const result = await searchStream(fileLines, regex, {
+          ...searchOpts,
+          filename,
+        });
+        if (result.matched) {
+          anyMatch = true;
         }
       }
     }
 
-    // Exit codes: 0 = match found (or files without match for -L), 1 = no match, 2 = error
-    // For -L, success means we found files without matches (stdout has content)
     let exitCode: number;
     if (anyError) {
       exitCode = 2;
     } else if (filesWithoutMatch) {
-      exitCode = stdout.length > 0 ? 0 : 1;
+      exitCode = anyNonMatch ? 0 : 1;
     } else {
       exitCode = anyMatch ? 0 : 1;
     }
 
-    if (quietMode) {
-      return { stdout: "", stderr: "", exitCode };
-    }
-
-    if (stdout) {
-      await ctx.writeStdout(stdout);
-      return { stdout: "", stderr, exitCode };
-    }
-
-    return { stdout: "", stderr, exitCode };
+    return { exitCode };
   },
 };
 

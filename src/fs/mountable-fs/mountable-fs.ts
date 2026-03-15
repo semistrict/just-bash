@@ -654,8 +654,11 @@ export class MountableFs implements IFileSystem {
     return fs.utimes(relativePath, atime, mtime);
   }
 
-  createReadStream(path: string, chunkSize?: number): AsyncIterable<string> {
+  createReadStream(
+    path: string,
+    options?: { chunkSize?: number; encoding?: "binary" },
+  ): AsyncIterable<string> {
     const { fs, relativePath } = this.routePath(path);
-    return fs.createReadStream(relativePath, chunkSize);
+    return fs.createReadStream(relativePath, options);
   }
 }

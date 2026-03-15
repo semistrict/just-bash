@@ -1,4 +1,4 @@
-import type { Command, CommandContext, CommandResult } from "../../types.js";
+import type { Command, CommandResult } from "../../types.js";
 import { parseArgs } from "../../utils/args.js";
 import { hasHelpFlag, showHelp } from "../help.js";
 
@@ -61,7 +61,9 @@ export const catCommand: Command = {
           isReadingFiles = true;
           try {
             const filePath = ctx.fs.resolvePath(ctx.cwd, file);
-            for await (const chunk of ctx.fs.createReadStream(filePath)) {
+            for await (const chunk of ctx.fs.createReadStream(filePath, {
+              encoding: "binary",
+            })) {
               await writeContent(chunk);
             }
           } catch {
