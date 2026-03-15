@@ -242,9 +242,14 @@ export interface Command {
    */
   trusted?: boolean;
   /**
-   * When true, this command supports streaming pipeline execution.
-   * It will receive writeStdout/writeStderr/stdinStream/abortUpstream
-   * on the CommandContext and should use them for incremental I/O.
+   * When true, this command reads input incrementally via stdinStream
+   * rather than buffered ctx.stdin. The pipeline executor uses this to
+   * decide input routing: streaming commands get the raw PipeChannel,
+   * non-streaming commands get the channel drained into a string.
+   *
+   * Output routing is determined at runtime: commands that write via
+   * writeStdout must not also return stdout (enforced by assertion).
+   * All commands receive writeStdout/writeStderr/stdinStream regardless.
    */
   streaming?: boolean;
   execute(args: string[], ctx: CommandContext): Promise<CommandResult>;

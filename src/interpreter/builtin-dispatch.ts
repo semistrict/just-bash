@@ -507,39 +507,27 @@ export async function executeExternalCommand(
     requireDefenseContext: ctx.requireDefenseContext,
     jsBootstrapCode: ctx.jsBootstrapCode,
     processTable,
-    // writeStdout/writeStderr are always set. In a pipeline, they come
-    // from StreamContext. For standalone streaming commands, we create
-    // local collectors. Non-streaming commands get a trap.
+    // writeStdout/writeStderr are always real. In a pipeline, they come
+    // from StreamContext. Outside a pipeline, they collect into
+    // standaloneCollector. Commands may use writeStdout OR return stdout,
+    // not both (enforced by assertion after execute).
     writeStdout:
       dispatchCtx.streamCtx?.writeStdout ??
-      (cmd.streaming
-        ? async (chunk: string): Promise<void> => {
-            standaloneCollector.stdout += chunk;
-          }
-        : (): Promise<void> => {
-            throw new Error(
-              `${commandName}: writeStdout called on non-streaming command`,
-            );
-          }),
+      (async (chunk: string): Promise<void> => {
+        standaloneCollector.stdout += chunk;
+      }),
     writeStderr:
       dispatchCtx.streamCtx?.writeStderr ??
-      (cmd.streaming
-        ? (chunk: string): void => {
-            standaloneCollector.stderr += chunk;
-          }
-        : (): void => {
-            throw new Error(
-              `${commandName}: writeStderr called on non-streaming command`,
-            );
-          }),
+      ((chunk: string): void => {
+        standaloneCollector.stderr += chunk;
+      }),
     stdinStream:
       dispatchCtx.streamCtx?.stdinStream ??
       stdinToAsyncIterable(effectiveStdin),
     abortUpstream: dispatchCtx.streamCtx?.abortUpstream,
   };
-  // Collectors for standalone streaming commands (no pipeline context).
+  // Collectors for standalone commands (no pipeline context).
   const standaloneCollector = { stdout: "", stderr: "" };
-  const isStandaloneStreaming = cmd.streaming && !dispatchCtx.streamCtx;
 
   const guardedCmdCtx = createDefenseAwareCommandContext(cmdCtx, commandName);
 
@@ -556,16 +544,26 @@ export async function executeExternalCommand(
       ? await DefenseInDepthBox.runTrustedAsync(() => runCommand())
       : await runCommand();
 
+    const rawStdout = raw.stdout ?? "";
+    const rawStderr = raw.stderr ?? "";
+
+    // Mutual exclusivity: a command must write via writeStdout OR return
+    // stdout in its result, never both. Doing both is a bug.
+    if (standaloneCollector.stdout && rawStdout) {
+      throw new Error(
+        `${commandName}: bug: command wrote to writeStdout AND returned non-empty stdout — use one or the other`,
+      );
+    }
+
     // Normalize CommandResult → ExecResult.
-    // Streaming commands return just { exitCode }; standalone collectors
-    // or pipeline collectedStdout fill in stdout/stderr.
+    // If writeStdout was used (standalone), collector has the output.
+    // If not, raw.stdout has it. In pipeline context, standaloneCollector
+    // is always empty — output went to the pipeline's StreamContext.
     const result: ExecResult = {
-      stdout: isStandaloneStreaming
-        ? standaloneCollector.stdout || raw.stdout || ""
-        : (raw.stdout ?? ""),
-      stderr: isStandaloneStreaming
-        ? standaloneCollector.stderr || raw.stderr || ""
-        : (raw.stderr ?? ""),
+      stdout: standaloneCollector.stdout || rawStdout,
+      stderr: standaloneCollector.stderr
+        ? standaloneCollector.stderr + rawStderr
+        : rawStderr,
       exitCode: raw.exitCode,
       // @banned-pattern-ignore: spread from command result, only stdoutEncoding
       ...(raw.stdoutEncoding ? { stdoutEncoding: raw.stdoutEncoding } : {}),

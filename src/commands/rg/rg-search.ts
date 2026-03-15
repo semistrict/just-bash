@@ -276,13 +276,12 @@ async function searchStdin(
     return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
   }
 
-  if (result.output) await ctx.writeStdout(result.output);
+  if (result.output) {
+    await ctx.writeStdout(result.output);
+    return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
+  }
 
-  return {
-    stdout: result.output,
-    stderr: "",
-    exitCode: result.matched ? 0 : 1,
-  };
+  return { stdout: "", stderr: "", exitCode: result.matched ? 0 : 1 };
 }
 
 /**
@@ -1088,11 +1087,10 @@ async function searchFiles(
     exitCode = anyMatch ? 0 : 1;
   }
 
-  if (finalStdout) await ctx.writeStdout(finalStdout);
+  if (finalStdout) {
+    await ctx.writeStdout(finalStdout);
+    return { stdout: "", stderr: "", exitCode };
+  }
 
-  return {
-    stdout: finalStdout,
-    stderr: "",
-    exitCode,
-  };
+  return { stdout: "", stderr: "", exitCode };
 }

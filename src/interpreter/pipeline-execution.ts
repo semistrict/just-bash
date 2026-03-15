@@ -4,8 +4,16 @@
  * Handles execution of command pipelines (cmd1 | cmd2 | cmd3).
  *
  * Multi-command pipelines run all stages concurrently, connected by
- * PipeChannels. Streaming-capable commands (cat, head) read/write
- * incrementally; all other commands are wrapped with buffered I/O.
+ * PipeChannels. Every stage gets a StreamContext with writeStdout.
+ *
+ * Input routing: streaming commands (cat, head) get the raw channel as
+ * stdinStream for incremental reads. Non-streaming commands get the
+ * channel drained into a buffered stdin string.
+ *
+ * Output routing: determined at runtime — if the command wrote via
+ * writeStdout, its output is already in the channel; otherwise the
+ * pipeline pushes result.stdout. Commands must not do both (enforced
+ * by an assertion in executeExternalCommand).
  */
 
 import type { CommandNode, PipelineNode } from "../ast/types.js";
@@ -21,7 +29,7 @@ import type { InterpreterContext } from "./types.js";
  * Allows commands to do incremental I/O instead of buffered strings.
  */
 export interface StreamContext {
-  /** Write stdout chunk. Always available for streaming commands. */
+  /** Write stdout chunk. Always available — commands may use this or return stdout, not both. */
   writeStdout: (chunk: string) => Promise<void>;
   writeStderr: (chunk: string) => void;
   stdinStream?: AsyncIterable<string>;
@@ -47,8 +55,10 @@ export type ExecuteCommandFn = (
 
 /**
  * Check if a CommandNode is a SimpleCommand whose registered command
- * has `streaming: true`. Functions override commands, so a function
- * with the same name disables streaming.
+ * has `streaming: true`. Used for input routing: streaming commands
+ * get the raw PipeChannel as stdinStream instead of drained stdin.
+ * Functions override commands, so a function with the same name
+ * disables streaming.
  */
 function isStreamingCommand(
   node: CommandNode,
@@ -124,9 +134,8 @@ async function executeSingleCommandPipeline(
  * Concurrent multi-command pipeline.
  *
  * Creates N-1 PipeChannels connecting N stages. Each stage runs as a
- * concurrent Promise. Non-streaming commands are wrapped: input channel
- * is drained to a string, command runs as before, output is pushed to
- * the next channel. Streaming commands get the channel directly.
+ * concurrent Promise with a StreamContext providing writeStdout and
+ * (for streaming commands) stdinStream.
  */
 async function executeMultiCommandPipeline(
   ctx: InterpreterContext,
@@ -143,10 +152,12 @@ async function executeMultiCommandPipeline(
     channels.push(new PipeChannel());
   }
 
-  // Determine which stages are streaming
-  const streamingFlags = node.commands.map((cmd) =>
-    isStreamingCommand(cmd, ctx),
-  );
+  // Save groupStdin before concurrent launch — the first stage inherits
+  // it (for inner pipelines inside groups), all others must not see it.
+  // We clear it here and pass it explicitly to avoid races between
+  // concurrent stages modifying shared state.
+  const parentGroupStdin = ctx.state.groupStdin;
+  ctx.state.groupStdin = undefined;
 
   // Track per-stage results
   interface StageResult {
@@ -162,7 +173,7 @@ async function executeMultiCommandPipeline(
       const inputChannel = isFirst ? null : channels[i - 1];
       const outputChannel = isLast ? null : channels[i];
       const pipeStderrToNext = !isLast && (node.pipeStderr?.[i] ?? false);
-      const isStreaming = streamingFlags[i];
+      const isStreaming = isStreamingCommand(command, ctx);
       const runsInSubshell = !isLast || !ctx.state.shoptOptions.lastpipe;
 
       return runStage(
@@ -176,6 +187,7 @@ async function executeMultiCommandPipeline(
         runsInSubshell,
         isFirst,
         i,
+        isFirst ? parentGroupStdin : undefined,
       );
     },
   );
@@ -287,8 +299,16 @@ async function executeMultiCommandPipeline(
 }
 
 /**
- * Run a single pipeline stage. Handles both streaming and non-streaming
- * commands, env save/restore for subshell context, and error translation.
+ * Run a single pipeline stage.
+ *
+ * All stages get a StreamContext with writeStdout. Input routing depends
+ * on isStreaming: streaming commands get the raw channel as stdinStream,
+ * non-streaming commands get the channel drained into stdin.
+ *
+ * Output routing is runtime: if result.stdout is non-empty, push it to
+ * the output channel (non-streaming path). If empty, output already went
+ * via writeStdout during execution (streaming path). Commands must not
+ * do both — enforced by assertion in executeExternalCommand.
  */
 async function runStage(
   ctx: InterpreterContext,
@@ -301,6 +321,7 @@ async function runStage(
   runsInSubshell: boolean,
   isFirst: boolean,
   index: number,
+  groupStdin?: string,
 ): Promise<{ result: ExecResult; index: number }> {
   // Subshell context: save env
   const savedEnv = runsInSubshell ? new Map(ctx.state.env) : null;
@@ -308,38 +329,117 @@ async function runStage(
   // Clear $_ for pipeline commands
   ctx.state.lastArg = "";
 
-  // After the first command, clear groupStdin
-  if (!isFirst) {
-    ctx.state.groupStdin = undefined;
-  }
+  // Set groupStdin for this stage — already cleared by parent for
+  // non-first stages, and passed explicitly for the first stage to
+  // avoid concurrent races on shared state.
+  ctx.state.groupStdin = groupStdin;
 
   try {
-    let result: ExecResult;
-
-    if (isStreaming && (inputChannel || outputChannel)) {
-      // Track A — streaming command
-      result = await runStreamingStage(
-        command,
-        executeCommand,
-        inputChannel,
-        outputChannel,
-        pipeStderrToNext,
-      );
-    } else {
-      // Track B — non-streaming (buffered) command
-      result = await runBufferedStage(
-        command,
-        executeCommand,
-        inputChannel,
-        outputChannel,
-        pipeStderrToNext,
-      );
+    // --- Input routing ---
+    // Streaming commands get the raw channel for incremental reads.
+    // Non-streaming commands get the channel drained into a string.
+    // For the first stage with no input channel, groupStdin flows
+    // through as the stdin parameter so inner commands can use it.
+    let stdin = "";
+    if (!isStreaming && inputChannel) {
+      for await (const chunk of inputChannel) {
+        stdin += chunk;
+      }
+    } else if (isFirst && !inputChannel && groupStdin) {
+      stdin = groupStdin;
     }
 
+    // --- Build StreamContext ---
+    let stageStderr = "";
+    const streamCtx: StreamContext = {
+      writeStdout: outputChannel
+        ? async (chunk: string) => {
+            await outputChannel.write(chunk);
+          }
+        : async (chunk: string) => {
+            streamCtx.collectedStdout =
+              (streamCtx.collectedStdout ?? "") + chunk;
+          },
+      writeStderr: (chunk: string) => {
+        stageStderr += chunk;
+      },
+      stdinStream: isStreaming ? (inputChannel ?? undefined) : undefined,
+      abortUpstream: () => {
+        if (inputChannel) inputChannel.abort();
+      },
+    };
+
+    // --- Execute ---
+    let result = await executeCommand(command, stdin, streamCtx);
+
+    // --- Output routing ---
+    if (outputChannel) {
+      // Push buffered stdout to channel. Streaming commands return
+      // stdout="" (enforced by assertion in executeExternalCommand),
+      // so this is a no-op for them — their output already went via
+      // writeStdout during execution.
+      try {
+        const output = pipeStderrToNext
+          ? result.stderr + result.stdout
+          : result.stdout;
+        if (output) {
+          await outputChannel.write(output);
+        }
+      } catch (error) {
+        if (error instanceof BrokenPipeError) {
+          outputChannel.close();
+          return {
+            result: {
+              stdout: "",
+              stderr: pipeStderrToNext ? "" : result.stderr,
+              exitCode: 141,
+            },
+            index,
+          };
+        }
+        throw error;
+      }
+      outputChannel.close();
+
+      if (pipeStderrToNext) {
+        return {
+          result: { stdout: "", stderr: "", exitCode: result.exitCode },
+          index,
+        };
+      }
+      return {
+        result: {
+          stdout: "",
+          stderr: stageStderr + result.stderr,
+          exitCode: result.exitCode,
+        },
+        index,
+      };
+    }
+
+    // Last stage — collectedStdout is merged into ExecResult by the
+    // interpreter (before redirections). Merge any streaming stderr here.
+    if (stageStderr) {
+      result = { ...result, stderr: stageStderr + result.stderr };
+    }
     return { result, index };
   } catch (error) {
-    // Close output channel on error so downstream doesn't hang
-    if (outputChannel) outputChannel.close();
+    // Push any stdout from the error before closing the channel,
+    // so downstream stages still see partial output (e.g., errexit
+    // after some echo statements in a group).
+    if (outputChannel) {
+      if (
+        (error instanceof ErrexitError || error instanceof ExitError) &&
+        error.stdout
+      ) {
+        try {
+          await outputChannel.write(error.stdout);
+        } catch {
+          // Ignore BrokenPipeError — downstream already closed
+        }
+      }
+      outputChannel.close();
+    }
     throw error;
   } finally {
     // Restore env for subshell commands
@@ -347,135 +447,6 @@ async function runStage(
       ctx.state.env = savedEnv;
     }
   }
-}
-
-/**
- * Run a non-streaming stage:
- * 1. Drain input channel into a string
- * 2. Execute command with buffered stdin
- * 3. Write stdout to output channel
- * 4. Close output channel
- */
-async function runBufferedStage(
-  command: CommandNode,
-  executeCommand: ExecuteCommandFn,
-  inputChannel: PipeChannel | null,
-  outputChannel: PipeChannel | null,
-  pipeStderrToNext: boolean,
-): Promise<ExecResult> {
-  // Drain input channel
-  let stdin = "";
-  if (inputChannel) {
-    for await (const chunk of inputChannel) {
-      stdin += chunk;
-    }
-  }
-
-  let result: ExecResult;
-  try {
-    result = await executeCommand(command, stdin);
-  } catch (error) {
-    if (outputChannel) outputChannel.close();
-    throw error;
-  }
-
-  // Push output to next stage
-  if (outputChannel) {
-    try {
-      const output = pipeStderrToNext
-        ? result.stderr + result.stdout
-        : result.stdout;
-      if (output) {
-        await outputChannel.write(output);
-      }
-    } catch (error) {
-      if (error instanceof BrokenPipeError) {
-        // Downstream aborted — record SIGPIPE exit code
-        outputChannel.close();
-        return {
-          stdout: "",
-          stderr: pipeStderrToNext ? "" : result.stderr,
-          exitCode: 141,
-        };
-      }
-      throw error;
-    }
-    outputChannel.close();
-
-    // Non-last stages: return with cleared stdout (already piped)
-    if (pipeStderrToNext) {
-      return { stdout: "", stderr: "", exitCode: result.exitCode };
-    }
-    return { stdout: "", stderr: result.stderr, exitCode: result.exitCode };
-  }
-
-  return result;
-}
-
-/**
- * Run a streaming stage:
- * 1. Build a StreamContext from input/output channels
- * 2. Execute command with streamCtx
- * 3. Close output channel when done
- */
-async function runStreamingStage(
-  command: CommandNode,
-  executeCommand: ExecuteCommandFn,
-  inputChannel: PipeChannel | null,
-  outputChannel: PipeChannel | null,
-  pipeStderrToNext: boolean,
-): Promise<ExecResult> {
-  let stageStderr = "";
-
-  const streamCtx: StreamContext = {
-    // writeStdout always works. Middle stages push to the channel;
-    // last stage collects into streamCtx.collectedStdout which the
-    // interpreter merges into ExecResult before applying redirections.
-    writeStdout: outputChannel
-      ? async (chunk: string) => {
-          await outputChannel.write(chunk);
-        }
-      : async (chunk: string) => {
-          streamCtx.collectedStdout = (streamCtx.collectedStdout ?? "") + chunk;
-        },
-    writeStderr: (chunk: string) => {
-      stageStderr += chunk;
-    },
-    stdinStream: inputChannel ?? undefined,
-    abortUpstream: () => {
-      if (inputChannel) inputChannel.abort();
-    },
-  };
-
-  let result: ExecResult;
-  try {
-    result = await executeCommand(command, "", streamCtx);
-  } catch (error) {
-    if (outputChannel) outputChannel.close();
-    throw error;
-  }
-
-  if (outputChannel) {
-    // Output was already pushed via writeStdout during command execution.
-    // Just close the channel.
-    outputChannel.close();
-
-    if (pipeStderrToNext) {
-      return { stdout: "", stderr: "", exitCode: result.exitCode };
-    }
-    return {
-      stdout: "",
-      stderr: stageStderr + result.stderr,
-      exitCode: result.exitCode,
-    };
-  }
-
-  // Last stage — collectedStdout is merged into ExecResult by the
-  // interpreter (before redirections). Merge any streaming stderr here.
-  if (stageStderr) {
-    result = { ...result, stderr: stageStderr + result.stderr };
-  }
-  return result;
 }
 
 // ============================================================================
