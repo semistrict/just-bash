@@ -161,14 +161,14 @@ function wrapFileSystem(
     // Assert defense context on call; iteration inherits the context.
     createReadStream: (
       path: string,
-      chunkSize?: number,
+      options?: { chunkSize?: number; encoding?: "binary" },
     ): AsyncIterable<string> => {
       assertDefenseContext(
         requireDefenseContext,
         component,
         "fs.createReadStream call",
       );
-      return fs.createReadStream(path, chunkSize);
+      return fs.createReadStream(path, options);
     },
   };
 

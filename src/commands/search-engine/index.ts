@@ -19,3 +19,4 @@ export {
   type RegexOptions,
   type RegexResult,
 } from "./regex.js";
+export { searchStream } from "./streaming-search.js";
