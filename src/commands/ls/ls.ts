@@ -51,6 +51,16 @@ function formatDate(date: Date): string {
   return `${month} ${day}  ${year}`;
 }
 
+// Format a numeric mode into a permission string like "rwxr-xr-x"
+function formatMode(stat: FsStat): string {
+  const m = stat.mode;
+  const type = stat.isDirectory ? "d" : stat.isSymbolicLink ? "l" : "-";
+  const r = (bit: number) => (m & bit ? "r" : "-");
+  const w = (bit: number) => (m & bit ? "w" : "-");
+  const x = (bit: number) => (m & bit ? "x" : "-");
+  return `${type}${r(0o400)}${w(0o200)}${x(0o100)}${r(0o040)}${w(0o020)}${x(0o010)}${r(0o004)}${w(0o002)}${x(0o001)}`;
+}
+
 // Classify suffix for ls -F: / directory, @ symlink, * executable
 function classifySuffix(stat: FsStat): string {
   if (stat.isDirectory) return "/";
@@ -145,7 +155,7 @@ export const lsCommand: Command = {
         try {
           const stat = await ctx.fs.stat(fullPath);
           if (longFormat) {
-            const mode = stat.isDirectory ? "drwxr-xr-x" : "-rw-r--r--";
+            const mode = formatMode(stat);
             const suffix = classifyFiles
               ? classifySuffix(await ctx.fs.lstat(fullPath))
               : stat.isDirectory
@@ -278,7 +288,7 @@ async function listGlob(
       const fullPath = ctx.fs.resolvePath(ctx.cwd, match);
       try {
         const stat = await ctx.fs.stat(fullPath);
-        const mode = stat.isDirectory ? "drwxr-xr-x" : "-rw-r--r--";
+        const mode = formatMode(stat);
         const suffix = classifyFiles
           ? classifySuffix(await ctx.fs.lstat(fullPath))
           : stat.isDirectory
@@ -350,7 +360,7 @@ async function listPath(
         const mtime = stat.mtime ?? new Date(0);
         const dateStr = formatDate(mtime);
         return {
-          stdout: `-rw-r--r-- 1 user user ${sizeStr} ${dateStr} ${path}${fileSuffix}\n`,
+          stdout: `${formatMode(stat)} 1 user user ${sizeStr} ${dateStr} ${path}${fileSuffix}\n`,
           stderr: "",
           exitCode: 0,
         };

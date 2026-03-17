@@ -404,6 +404,8 @@ export interface InterpreterState
   signal?: AbortSignal;
   /** Extra arguments injected via exec({ args }), appended to first command's args */
   extraArgs?: string[];
+  /** When true, wait for background jobs on script exit instead of aborting them. */
+  waitForBackgroundJobs?: boolean;
 }
 
 // ============================================================================

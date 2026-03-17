@@ -657,26 +657,31 @@ export class Interpreter {
       return { stdout: "", stderr: "" };
     }
 
-    // Abort all still-running jobs
-    for (const [, job] of jobTable) {
-      if (job.status === "Running") {
-        job.abortController.abort();
+    if (this.ctx.state.waitForBackgroundJobs) {
+      // Wait for all background jobs to finish naturally
+      await Promise.all([...jobTable.values()].map((j) => j.promise));
+    } else {
+      // Abort all still-running jobs
+      for (const [, job] of jobTable) {
+        if (job.status === "Running") {
+          job.abortController.abort();
+        }
       }
-    }
 
-    // Await all promises with a timeout to prevent hanging on uncooperative
-    // sleep implementations (e.g., in tests with never-resolving sleeps).
-    const CLEANUP_TIMEOUT_MS = 100;
-    const timeout = new Promise<void>((resolve) => {
-      const timer = _setTimeout(resolve, CLEANUP_TIMEOUT_MS);
-      if (typeof timer === "object" && "unref" in timer) {
-        (timer as NodeJS.Timeout).unref();
-      }
-    });
-    await Promise.race([
-      Promise.all([...jobTable.values()].map((j) => j.promise)),
-      timeout,
-    ]);
+      // Await all promises with a timeout to prevent hanging on uncooperative
+      // sleep implementations (e.g., in tests with never-resolving sleeps).
+      const CLEANUP_TIMEOUT_MS = 100;
+      const timeout = new Promise<void>((resolve) => {
+        const timer = _setTimeout(resolve, CLEANUP_TIMEOUT_MS);
+        if (typeof timer === "object" && "unref" in timer) {
+          (timer as NodeJS.Timeout).unref();
+        }
+      });
+      await Promise.race([
+        Promise.all([...jobTable.values()].map((j) => j.promise)),
+        timeout,
+      ]);
+    }
 
     // Collect output
     let stdout = "";

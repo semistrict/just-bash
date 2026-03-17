@@ -270,6 +270,13 @@ export interface ExecOptions {
    * Output is still accumulated for the return value (dual channel).
    */
   onOutput?: (chunk: { stdout: string; stderr: string }) => void;
+  /**
+   * If true, wait for all background jobs to finish before returning,
+   * instead of aborting them with a short timeout. Useful when commands
+   * may be accidentally backgrounded (e.g. unquoted `&` in URLs).
+   * Default: false
+   */
+  waitForBackgroundJobs?: boolean;
 }
 
 export class Bash {
@@ -622,6 +629,8 @@ export class Bash {
       signal: options?.signal,
       // Extra arguments injected directly into first command's arg list
       extraArgs: options?.args,
+      // Wait for background jobs instead of aborting on script exit
+      waitForBackgroundJobs: options?.waitForBackgroundJobs ?? false,
     };
 
     // Normalize indented multi-line scripts (unless rawScript is true)
