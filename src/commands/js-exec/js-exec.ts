@@ -11,8 +11,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { sanitizeErrorMessage } from "../../fs/sanitize-error.js";
+import {
+  sanitizeErrorMessage,
+  sanitizeHostErrorMessage,
+} from "../../fs/sanitize-error.js";
 import { mapToRecord } from "../../helpers/env.js";
+import { getErrorMessage } from "../../interpreter/helpers/errors.js";
 import { DefenseInDepthBox } from "../../security/defense-in-depth-box.js";
 import { _clearTimeout, _setTimeout } from "../../timers.js";
 import type {
@@ -328,9 +332,10 @@ function getOrCreateWorker(): Worker {
       return;
     }
     if (currentExecution) {
+      const workerError = sanitizeHostErrorMessage(getErrorMessage(err));
       currentExecution.resolve({
         success: false,
-        error: sanitizeErrorMessage(err.message),
+        error: workerError,
       });
       currentExecution = null;
     }
@@ -501,16 +506,19 @@ async function executeJSInner(
 
   const [bridgeOutput, workerResult] = await Promise.all([
     bridgeHandler.run(timeoutMs),
-    workerPromise.catch((e) => ({
-      success: false,
-      error: sanitizeErrorMessage((e as Error).message),
-    })),
+    workerPromise.catch((e) => {
+      const workerError = sanitizeHostErrorMessage(getErrorMessage(e));
+      return {
+        success: false,
+        error: workerError,
+      };
+    }),
   ]);
 
   if (!workerResult.success && workerResult.error) {
     return {
       stdout: bridgeOutput.stdout,
-      stderr: `${bridgeOutput.stderr}js-exec: ${sanitizeErrorMessage(workerResult.error)}\n`,
+      stderr: `${bridgeOutput.stderr}js-exec: ${sanitizeHostErrorMessage(workerResult.error)}\n`,
       exitCode: bridgeOutput.exitCode || 1,
     };
   }
