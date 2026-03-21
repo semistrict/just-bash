@@ -189,6 +189,47 @@ export interface CommandContext {
    * user access/injection via environment variables.
    */
   jsBootstrapCode?: string;
+  /**
+   * Virtual process table for the `ps` command.
+   * Populated from the job table when building the command context.
+   */
+  processTable?: ProcessTableEntry[];
+  /**
+   * Write stdout chunk. Resolves when consumed (backpressure).
+   * Always available. Streaming commands write here for incremental output.
+   * Non-streaming commands must not call this (it will throw).
+   */
+  writeStdout: (chunk: string) => Promise<void>;
+  /**
+   * Write stderr chunk. Always available, same as writeStdout.
+   * Streaming commands write errors here instead of returning stderr.
+   */
+  writeStderr: (chunk: string) => Promise<void>;
+  /** Async iterable of stdin chunks. Always available — empty when no input. */
+  stdinStream: AsyncIterable<string>;
+  /** Signal upstream to stop producing (early termination). */
+  abortUpstream?: () => void;
+}
+
+/**
+ * Entry for the virtual process table, used by the `ps` command.
+ */
+export interface ProcessTableEntry {
+  pid: number;
+  command: string;
+  status: string;
+}
+
+/**
+ * What Command.execute() returns. Streaming commands can omit
+ * stdout/stderr (output went via writeStdout/writeStderr).
+ * Normalized to ExecResult at the executeExternalCommand boundary.
+ */
+export interface CommandResult {
+  stdout?: string;
+  stderr?: string;
+  exitCode: number;
+  stdoutEncoding?: "binary";
 }
 
 export interface Command {
@@ -200,7 +241,18 @@ export interface Command {
    * trusted wrappers only at narrow infrastructure boundaries.
    */
   trusted?: boolean;
-  execute(args: string[], ctx: CommandContext): Promise<ExecResult>;
+  /**
+   * When true, this command reads input incrementally via stdinStream
+   * rather than buffered ctx.stdin. The pipeline executor uses this to
+   * decide input routing: streaming commands get the raw PipeChannel,
+   * non-streaming commands get the channel drained into a string.
+   *
+   * Output routing is determined at runtime: commands that write via
+   * writeStdout must not also return stdout (enforced by assertion).
+   * All commands receive writeStdout/writeStderr/stdinStream regardless.
+   */
+  streaming?: boolean;
+  execute(args: string[], ctx: CommandContext): Promise<CommandResult>;
 }
 
 export type CommandRegistry = Map<string, Command>;

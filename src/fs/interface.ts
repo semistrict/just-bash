@@ -259,6 +259,25 @@ export interface IFileSystem {
    * @throws Error if path doesn't exist
    */
   utimes(path: string, atime: Date, mtime: Date): Promise<void>;
+
+  /**
+   * Read a file as an async iterable of string chunks (pull-based streaming).
+   * Consumers pull chunks on demand via `for await`. Backpressure is implicit:
+   * the producer only reads the next OS chunk when the consumer asks for it.
+   *
+   * Disk-backed filesystems stream in chunks; in-memory filesystems yield
+   * the content as a single chunk.
+   *
+   * @param path - Absolute file path
+   * @param options - Stream options
+   * @param options.chunkSize - Hint for chunk size in bytes (default: 64 KiB)
+   * @param options.encoding - "binary" for raw bytes as latin1, undefined for UTF-8 (default)
+   * @throws Error if file doesn't exist or is a directory
+   */
+  createReadStream(
+    path: string,
+    options?: { chunkSize?: number; encoding?: "binary" },
+  ): AsyncIterable<string>;
 }
 
 /**

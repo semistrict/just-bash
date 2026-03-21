@@ -2,13 +2,16 @@
 // Each command has an explicit loader function for bundler compatibility (Next.js, etc.)
 
 import { DefenseInDepthBox } from "../security/defense-in-depth-box.js";
-import type { Command, CommandContext, ExecResult } from "../types.js";
+import type { Command } from "../types.js";
 
 type CommandLoader = () => Promise<Command>;
 
 interface LazyCommandDef<T extends string = string> {
   name: T;
   load: CommandLoader;
+  /** Declared at registration time so the pipeline executor can detect
+   *  streaming-capable commands without triggering a lazy load. */
+  streaming?: boolean;
 }
 
 /** All available built-in command names (excludes network commands) */
@@ -95,7 +98,8 @@ export type CommandName =
   | "xan"
   | "sqlite3"
   | "time"
-  | "whoami";
+  | "whoami"
+  | "ps";
 
 /** Network command names (only available when network is configured) */
 export type NetworkCommandName = "curl";
@@ -122,6 +126,7 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   },
   {
     name: "cat",
+    streaming: true,
     load: async () => (await import("./cat/cat.js")).catCommand,
   },
   {
@@ -180,6 +185,7 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   // File viewing
   {
     name: "head",
+    streaming: true,
     load: async () => (await import("./head/head.js")).headCommand,
   },
   {
@@ -198,18 +204,22 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   // Text processing
   {
     name: "grep",
+    streaming: true,
     load: async () => (await import("./grep/grep.js")).grepCommand,
   },
   {
     name: "fgrep",
+    streaming: true,
     load: async () => (await import("./grep/grep.js")).fgrepCommand,
   },
   {
     name: "egrep",
+    streaming: true,
     load: async () => (await import("./grep/grep.js")).egrepCommand,
   },
   {
     name: "rg",
+    streaming: true,
     load: async () => (await import("./rg/rg.js")).rgCommand,
   },
   {
@@ -392,6 +402,7 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   },
   {
     name: "seq",
+    streaming: true,
     load: async () => (await import("./seq/seq.js")).seqCommand,
   },
   {
@@ -457,6 +468,12 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
     load: async () => (await import("./od/od.js")).od,
   },
 
+  // Process management
+  {
+    name: "ps",
+    load: async () => (await import("./ps/ps.js")).psCommand,
+  },
+
   // Compression
   {
     name: "gzip",
@@ -501,10 +518,12 @@ const pythonCommandLoaders: LazyCommandDef<PythonCommandName>[] = [];
 if (typeof __BROWSER__ === "undefined" || !__BROWSER__) {
   pythonCommandLoaders.push({
     name: "python3",
+    streaming: true,
     load: async () => (await import("./python3/python3.js")).python3Command,
   });
   pythonCommandLoaders.push({
     name: "python",
+    streaming: true,
     load: async () => (await import("./python3/python3.js")).pythonCommand,
   });
 }
@@ -539,7 +558,8 @@ const cache = new Map<string, Command>();
 function createLazyCommand(def: LazyCommandDef): Command {
   return {
     name: def.name,
-    async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+    streaming: def.streaming,
+    async execute(args, ctx) {
       let cmd = cache.get(def.name);
 
       if (!cmd) {

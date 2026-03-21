@@ -506,6 +506,7 @@ async function executePython(
 
 export const python3Command: Command = {
   name: "python3",
+  streaming: true,
 
   async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
     if (hasHelpFlag(args)) {
@@ -563,26 +564,52 @@ export const python3Command: Command = {
           exitCode: 2,
         };
       }
-    } else if (ctx.stdin.trim()) {
-      pythonCode = ctx.stdin;
-      scriptPath = "<stdin>";
     } else {
-      return {
-        stdout: "",
-        stderr:
-          "python3: no input provided (use -c CODE, -m MODULE, or provide a script file)\n",
-        exitCode: 2,
-      };
+      // No code/module/script — drain stdinStream for stdin input
+      {
+        let buffered = "";
+        for await (const chunk of ctx.stdinStream) {
+          buffered += chunk;
+        }
+        if (buffered) {
+          ctx = { ...ctx, stdin: buffered };
+        }
+      }
+
+      if (ctx.stdin.trim()) {
+        pythonCode = ctx.stdin;
+        scriptPath = "<stdin>";
+      } else {
+        return {
+          stdout: "",
+          stderr:
+            "python3: no input provided (use -c CODE, -m MODULE, or provide a script file)\n",
+          exitCode: 2,
+        };
+      }
     }
 
-    return executePython(pythonCode, ctx, scriptPath, parsed.scriptArgs);
+    const result = await executePython(
+      pythonCode,
+      ctx,
+      scriptPath,
+      parsed.scriptArgs,
+    );
+
+    if (result.stdout) {
+      await ctx.writeStdout(result.stdout);
+      return { ...result, stdout: "" };
+    }
+
+    return result;
   },
 };
 
 export const pythonCommand: Command = {
   name: "python",
+  streaming: true,
 
-  async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+  async execute(args, ctx) {
     return python3Command.execute(args, ctx);
   },
 };

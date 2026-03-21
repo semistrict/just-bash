@@ -618,7 +618,7 @@ describe.each([
         const content = await impl.readFile("/data.txt");
         expect(content).toBe("via symlink root");
       } finally {
-        fs.rmSync(linkRoot, { force: true });
+        fs.unlinkSync(linkRoot);
         fs.rmSync(realDir, { recursive: true, force: true });
       }
     });

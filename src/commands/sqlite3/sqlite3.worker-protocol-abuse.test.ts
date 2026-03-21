@@ -59,6 +59,13 @@ function createContext(
       ["IFS", " \t\n"],
     ]),
     stdin: "",
+    writeStdout: () => {
+      throw new Error("writeStdout called in test");
+    },
+    writeStderr: () => {
+      throw new Error("writeStderr called in test");
+    },
+    stdinStream: (async function* () {})(),
     ...overrides,
   };
 }

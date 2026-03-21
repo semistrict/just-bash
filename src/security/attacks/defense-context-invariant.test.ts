@@ -21,6 +21,13 @@ function createCommandContext(
     cwd: "/",
     env: new Map([["PATH", "/usr/bin:/bin"]]),
     stdin: "",
+    writeStdout: () => {
+      throw new Error("writeStdout called in test");
+    },
+    writeStderr: () => {
+      throw new Error("writeStderr called in test");
+    },
+    stdinStream: (async function* () {})(),
     requireDefenseContext: true,
     ...overrides,
   };

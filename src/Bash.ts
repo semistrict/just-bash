@@ -263,6 +263,13 @@ export interface ExecOptions {
    * positional parameters ($1, $2, "$@", etc.).
    */
   args?: string[];
+  /**
+   * Optional callback for streaming output.
+   * Called after each statement executes with its stdout/stderr.
+   * Background job output interleaves via this callback as well.
+   * Output is still accumulated for the return value (dual channel).
+   */
+  onOutput?: (chunk: { stdout: string; stderr: string }) => void;
 }
 
 export class Bash {
@@ -666,6 +673,7 @@ export class Bash {
           coverage: this.coverageWriter,
           requireDefenseContext: defenseBox?.isEnabled() === true,
           jsBootstrapCode: this.jsBootstrapCode,
+          outputSink: options?.onOutput,
         };
 
         const interpreter = new Interpreter(interpreterOptions, execState);

@@ -357,7 +357,8 @@ export interface InterpreterState
     ControlFlowState,
     ProcessState,
     IOState,
-    ExpansionState {
+    ExpansionState,
+    JobControlState {
   // ---- Core Environment ----
   /** Environment variables (exported to commands) - uses Map to prevent prototype pollution */
   env: Map<string, string>;
@@ -405,6 +406,55 @@ export interface InterpreterState
   extraArgs?: string[];
 }
 
+// ============================================================================
+// Job Control State
+// ============================================================================
+
+/** Status of a background job. */
+export type JobStatus = "Running" | "Done" | "Terminated" | "Stopped";
+
+/**
+ * A background job tracked in the job table.
+ */
+export interface Job {
+  /** Job number (displayed as [N]) */
+  jobId: number;
+  /** Virtual PID assigned to this job */
+  pid: number;
+  /** The command text that was backgrounded */
+  command: string;
+  /** Current status */
+  status: JobStatus;
+  /** Exit code (set when job completes) */
+  exitCode: number;
+  /** Promise that resolves when the job finishes */
+  promise: Promise<void>;
+  /** Abort controller to cancel the job */
+  abortController: AbortController;
+  /** Whether the completion notification has been printed */
+  notified: boolean;
+  /** Accumulated stdout from the job */
+  stdout: string;
+  /** Accumulated stderr from the job */
+  stderr: string;
+}
+
+/**
+ * Job control state tracked on the interpreter.
+ */
+export interface JobControlState {
+  /** Active job table: jobId → Job */
+  jobTable?: Map<number, Job>;
+  /** Next job ID to assign */
+  nextJobId?: number;
+}
+
+/**
+ * Callback for streaming output from the interpreter.
+ * Called after each statement or when background jobs produce output.
+ */
+export type OutputSink = (chunk: { stdout: string; stderr: string }) => void;
+
 export interface InterpreterContext {
   state: InterpreterState;
   fs: IFileSystem;
@@ -444,4 +494,9 @@ export interface InterpreterContext {
    * Threaded through the context chain instead of shell env.
    */
   jsBootstrapCode?: string;
+  /**
+   * Optional streaming output callback.
+   * Nulled out inside command substitutions to prevent leaking internal output.
+   */
+  outputSink?: OutputSink;
 }

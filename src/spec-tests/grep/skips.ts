@@ -157,12 +157,6 @@ const SKIP_TESTS: Map<string, string> = new Map<string, string>([
   // -L option (print files without matches)
   ["busybox-grep.tests:grep -L exitcode 0", "-L option not implemented"],
 
-  // -o option (only matching) - edge cases
-  [
-    "busybox-grep.tests:grep -o does not loop forever",
-    "-o option not implemented",
-  ],
-
   // -v with -f on empty file
   ["busybox-grep.tests:grep -v -f EMPTY_FILE", "-f option not supported"],
   ["busybox-grep.tests:grep -vxf EMPTY_FILE", "-f option not supported"],

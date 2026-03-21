@@ -2,6 +2,18 @@
  * Pipeline Execution
  *
  * Handles execution of command pipelines (cmd1 | cmd2 | cmd3).
+ *
+ * Multi-command pipelines run all stages concurrently, connected by
+ * PipeChannels. Every stage gets a StreamContext with writeStdout.
+ *
+ * Input routing: streaming commands (cat, head) get the raw channel as
+ * stdinStream for incremental reads. Non-streaming commands get the
+ * channel drained into a buffered stdin string.
+ *
+ * Output routing: determined at runtime — if the command wrote via
+ * writeStdout, its output is already in the channel; otherwise the
+ * pipeline pushes result.stdout. Commands must not do both (enforced
+ * by an assertion in executeExternalCommand).
  */
 
 import type { CommandNode, PipelineNode } from "../ast/types.js";
@@ -9,15 +21,58 @@ import { _performanceNow } from "../security/trusted-globals.js";
 import type { ExecResult } from "../types.js";
 import { BadSubstitutionError, ErrexitError, ExitError } from "./errors.js";
 import { OK } from "./helpers/result.js";
+import { BrokenPipeError, PipeChannel } from "./pipe-channel.js";
 import type { InterpreterContext } from "./types.js";
 
 /**
- * Type for executeCommand callback
+ * Streaming context threaded through to a command execution.
+ * Allows commands to do incremental I/O instead of buffered strings.
+ */
+export interface StreamContext {
+  /** Write stdout chunk. Always available — commands may use this or return stdout, not both. */
+  writeStdout: (chunk: string) => Promise<void>;
+  writeStderr: (chunk: string) => Promise<void>;
+  stdinStream?: AsyncIterable<string>;
+  abortUpstream: () => void;
+  /**
+   * Collected stdout from writeStdout calls (last-stage only).
+   * The interpreter merges this into ExecResult.stdout before
+   * applying redirections, so commands don't need to know their
+   * pipeline position.
+   */
+  collectedStdout?: string;
+}
+
+/**
+ * Type for executeCommand callback.
+ * The optional streamCtx enables streaming I/O for pipeline stages.
  */
 export type ExecuteCommandFn = (
   node: CommandNode,
   stdin: string,
+  streamCtx?: StreamContext,
 ) => Promise<ExecResult>;
+
+/**
+ * Check if a CommandNode is a SimpleCommand whose registered command
+ * has `streaming: true`. Used for input routing: streaming commands
+ * get the raw PipeChannel as stdinStream instead of drained stdin.
+ * Functions override commands, so a function with the same name
+ * disables streaming.
+ */
+function isStreamingCommand(
+  node: CommandNode,
+  ctx: InterpreterContext,
+): boolean {
+  if (node.type !== "SimpleCommand" || !node.name) return false;
+  if (node.name.parts.length !== 1 || node.name.parts[0].type !== "Literal")
+    return false;
+  const name = node.name.parts[0].value;
+  // Functions override commands
+  if (ctx.state.functions.has(name)) return false;
+  const cmd = ctx.commands.get(name);
+  return cmd?.streaming === true;
+}
 
 /**
  * Execute a pipeline node (command or sequence of piped commands).
@@ -30,123 +85,188 @@ export async function executePipeline(
   // Record start time for timed pipelines
   const startTime = node.timed ? _performanceNow() : 0;
 
-  let stdin = "";
-  let lastResult: ExecResult = OK;
-  let pipefailExitCode = 0; // Track rightmost failing command
-  const pipestatusExitCodes: number[] = []; // Track all exit codes for PIPESTATUS
-  let accumulatedStderr = ""; // Accumulate stderr from all pipeline commands
+  // Single-command pipeline: fast path (no channels needed)
+  if (node.commands.length <= 1) {
+    return executeSingleCommandPipeline(ctx, node, executeCommand, startTime);
+  }
 
-  // For multi-command pipelines, save parent's $_ because pipeline commands
-  // run in subshell-like contexts and should not affect parent's $_
-  // (except the last command when lastpipe is enabled)
-  const isMultiCommandPipeline = node.commands.length > 1;
-  const savedLastArg = ctx.state.lastArg;
+  // Multi-command pipeline: concurrent execution with PipeChannels
+  return executeMultiCommandPipeline(ctx, node, executeCommand, startTime);
+}
 
-  for (let i = 0; i < node.commands.length; i++) {
-    const command = node.commands[i];
-    const isLast = i === node.commands.length - 1;
-    const isFirst = i === 0;
+/**
+ * Fast path for single-command pipelines — identical to old behavior.
+ */
+async function executeSingleCommandPipeline(
+  ctx: InterpreterContext,
+  node: PipelineNode,
+  executeCommand: ExecuteCommandFn,
+  startTime: number,
+): Promise<ExecResult> {
+  const command = node.commands[0];
+  let lastResult: ExecResult;
 
-    // In a multi-command pipeline, each command runs in a subshell context
-    // where $_ starts empty (subshells don't inherit $_ from parent in same way)
-    if (isMultiCommandPipeline) {
-      // Clear $_ for each pipeline command - they each get fresh subshell context
-      ctx.state.lastArg = "";
-
-      // After the first command, clear groupStdin so subsequent commands
-      // only see stdin from the pipeline (even if empty), not the original groupStdin
-      // This prevents commands like head from incorrectly falling back to groupStdin
-      // when they receive empty output from a previous command (e.g., grep with no matches)
-      if (!isFirst) {
-        ctx.state.groupStdin = undefined;
-      }
-    }
-
-    // Determine if this command runs in a subshell context
-    // In bash, all commands except the last run in subshells
-    // With lastpipe enabled, the last command runs in the current shell
-    const runsInSubshell =
-      isMultiCommandPipeline && (!isLast || !ctx.state.shoptOptions.lastpipe);
-
-    // Save environment for commands running in subshell context
-    // This prevents variable assignments (e.g., ${cmd=echo}) from leaking to parent
-    const savedEnv = runsInSubshell ? new Map(ctx.state.env) : null;
-
-    let result: ExecResult;
-    try {
-      result = await executeCommand(command, stdin);
-    } catch (error) {
-      // BadSubstitutionError should fail the command but not abort the script
-      if (error instanceof BadSubstitutionError) {
-        result = {
-          stdout: error.stdout,
-          stderr: error.stderr,
-          exitCode: 1,
-        };
-      }
-      // In a MULTI-command pipeline, each command runs in a subshell context
-      // So exit/return/errexit only affect that segment, not the whole script
-      // For single commands, let these errors propagate to terminate the script
-      else if (error instanceof ExitError && node.commands.length > 1) {
-        result = {
-          stdout: error.stdout,
-          stderr: error.stderr,
-          exitCode: error.exitCode,
-        };
-      } else if (error instanceof ErrexitError && node.commands.length > 1) {
-        // Errexit inside a pipeline segment should only fail that segment
-        // The pipeline's exit code comes from the last command (or pipefail)
-        result = {
-          stdout: error.stdout,
-          stderr: error.stderr,
-          exitCode: error.exitCode,
-        };
-      } else {
-        // Restore environment before re-throwing
-        if (savedEnv) {
-          ctx.state.env = savedEnv;
-        }
-        throw error;
-      }
-    }
-
-    // Restore environment for subshell commands to prevent variable assignment leakage
-    if (savedEnv) {
-      ctx.state.env = savedEnv;
-    }
-
-    // Track exit code for PIPESTATUS
-    pipestatusExitCodes.push(result.exitCode);
-
-    // Track the exit code of failing commands for pipefail
-    if (result.exitCode !== 0) {
-      pipefailExitCode = result.exitCode;
-    }
-
-    if (!isLast) {
-      // Check if this pipe is |& (pipe stderr to next command's stdin too)
-      const pipeStderrToNext = node.pipeStderr?.[i] ?? false;
-      if (pipeStderrToNext) {
-        // |& pipes both stdout and stderr to next command's stdin
-        stdin = result.stderr + result.stdout;
-      } else {
-        // Regular | only pipes stdout; stderr goes to the parent
-        stdin = result.stdout;
-        accumulatedStderr += result.stderr;
-      }
+  try {
+    lastResult = await executeCommand(command, "");
+  } catch (error) {
+    if (error instanceof BadSubstitutionError) {
       lastResult = {
-        stdout: "",
-        stderr: "",
-        exitCode: result.exitCode,
+        stdout: error.stdout,
+        stderr: error.stderr,
+        exitCode: 1,
       };
     } else {
-      lastResult = result;
+      throw error;
     }
   }
 
-  // Merge stderr from all non-last pipeline commands into the final result.
-  // In bash, stderr from each pipeline command goes to the terminal (parent),
-  // not through the pipe. Only stdout flows through pipes.
+  // PIPESTATUS for single SimpleCommand
+  if (command.type === "SimpleCommand") {
+    setPipestatus(ctx, [lastResult.exitCode]);
+  }
+
+  lastResult = applyNegation(node, lastResult);
+  lastResult = applyTiming(node, lastResult, startTime);
+  return lastResult;
+}
+
+/**
+ * Concurrent multi-command pipeline.
+ *
+ * Creates N-1 PipeChannels connecting N stages. Each stage runs as a
+ * concurrent Promise with a StreamContext providing writeStdout and
+ * (for streaming commands) stdinStream.
+ */
+async function executeMultiCommandPipeline(
+  ctx: InterpreterContext,
+  node: PipelineNode,
+  executeCommand: ExecuteCommandFn,
+  startTime: number,
+): Promise<ExecResult> {
+  const n = node.commands.length;
+  const savedLastArg = ctx.state.lastArg;
+
+  // Create N-1 channels between stages
+  const channels: PipeChannel[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    channels.push(new PipeChannel());
+  }
+
+  // Save groupStdin before concurrent launch — the first stage inherits
+  // it (for inner pipelines inside groups), all others must not see it.
+  // We clear it here and pass it explicitly to avoid races between
+  // concurrent stages modifying shared state.
+  const parentGroupStdin = ctx.state.groupStdin;
+  ctx.state.groupStdin = undefined;
+
+  // Track per-stage results
+  interface StageResult {
+    result: ExecResult;
+    index: number;
+  }
+
+  // Launch all stages concurrently
+  const stagePromises: Promise<StageResult>[] = node.commands.map(
+    (command, i) => {
+      const isFirst = i === 0;
+      const isLast = i === n - 1;
+      const inputChannel = isFirst ? null : channels[i - 1];
+      const outputChannel = isLast ? null : channels[i];
+      const pipeStderrToNext = !isLast && (node.pipeStderr?.[i] ?? false);
+      const isStreaming = isStreamingCommand(command, ctx);
+      const runsInSubshell = !isLast || !ctx.state.shoptOptions.lastpipe;
+
+      return runStage(
+        ctx,
+        command,
+        executeCommand,
+        inputChannel,
+        outputChannel,
+        pipeStderrToNext,
+        isStreaming,
+        runsInSubshell,
+        isFirst,
+        i,
+        isFirst ? parentGroupStdin : undefined,
+      );
+    },
+  );
+
+  // Await all stages
+  const settled = await Promise.allSettled(stagePromises);
+
+  // Collect results
+  const pipestatusExitCodes: number[] = [];
+  let accumulatedStderr = "";
+  let lastResult: ExecResult = OK;
+  const stageErrors: unknown[] = [];
+
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    const isLast = i === n - 1;
+
+    if (outcome.status === "fulfilled") {
+      const { result } = outcome.value;
+      pipestatusExitCodes.push(result.exitCode);
+
+      if (!isLast) {
+        const pipeStderrToNext = node.pipeStderr?.[i] ?? false;
+        if (!pipeStderrToNext) {
+          accumulatedStderr += result.stderr;
+        }
+      } else {
+        lastResult = result;
+      }
+    } else {
+      // Stage rejected — check if it's a control flow error we should handle
+      const error = outcome.reason;
+      if (error instanceof BadSubstitutionError) {
+        pipestatusExitCodes.push(1);
+        if (!isLast) {
+          accumulatedStderr += error.stderr;
+        } else {
+          lastResult = {
+            stdout: error.stdout,
+            stderr: error.stderr,
+            exitCode: 1,
+          };
+        }
+      } else if (error instanceof ExitError) {
+        pipestatusExitCodes.push(error.exitCode);
+        if (!isLast) {
+          accumulatedStderr += error.stderr;
+        } else {
+          lastResult = {
+            stdout: error.stdout,
+            stderr: error.stderr,
+            exitCode: error.exitCode,
+          };
+        }
+      } else if (error instanceof ErrexitError) {
+        pipestatusExitCodes.push(error.exitCode);
+        if (!isLast) {
+          accumulatedStderr += error.stderr;
+        } else {
+          lastResult = {
+            stdout: error.stdout,
+            stderr: error.stderr,
+            exitCode: error.exitCode,
+          };
+        }
+      } else {
+        // Fatal error — collect and re-throw after cleanup
+        stageErrors.push(error);
+        pipestatusExitCodes.push(1);
+      }
+    }
+  }
+
+  // If any stage had a fatal error, re-throw the first one
+  if (stageErrors.length > 0) {
+    throw stageErrors[0];
+  }
+
+  // Merge stderr from non-last stages
   if (accumulatedStderr) {
     lastResult = {
       ...lastResult,
@@ -154,75 +274,224 @@ export async function executePipeline(
     };
   }
 
-  // Set PIPESTATUS array with exit codes from all pipeline commands
-  // For single-command pipelines with compound commands, don't set PIPESTATUS here -
-  // let inner statements set it (e.g., non-matching case statements should leave
-  // PIPESTATUS unchanged, matching bash behavior).
-  // For multi-command pipelines or simple commands, always set PIPESTATUS.
-  const shouldSetPipestatus =
-    node.commands.length > 1 ||
-    (node.commands.length === 1 && node.commands[0].type === "SimpleCommand");
+  // Set PIPESTATUS
+  setPipestatus(ctx, pipestatusExitCodes);
 
-  if (shouldSetPipestatus) {
-    // Clear any previous PIPESTATUS entries
-    for (const key of ctx.state.env.keys()) {
-      if (key.startsWith("PIPESTATUS_")) {
-        ctx.state.env.delete(key);
-      }
+  // Pipefail: use rightmost failing exit code
+  if (ctx.state.options.pipefail) {
+    let pipefailExitCode = 0;
+    for (const code of pipestatusExitCodes) {
+      if (code !== 0) pipefailExitCode = code;
     }
-    // Set new PIPESTATUS entries
-    for (let i = 0; i < pipestatusExitCodes.length; i++) {
-      ctx.state.env.set(`PIPESTATUS_${i}`, String(pipestatusExitCodes[i]));
+    if (pipefailExitCode !== 0) {
+      lastResult = { ...lastResult, exitCode: pipefailExitCode };
     }
-    ctx.state.env.set("PIPESTATUS__length", String(pipestatusExitCodes.length));
   }
 
-  // If pipefail is enabled, use the rightmost failing exit code
-  if (ctx.state.options.pipefail && pipefailExitCode !== 0) {
-    lastResult = {
-      ...lastResult,
-      exitCode: pipefailExitCode,
-    };
-  }
-
-  if (node.negated) {
-    lastResult = {
-      ...lastResult,
-      exitCode: lastResult.exitCode === 0 ? 1 : 0,
-    };
-  }
-
-  // Output timing info for timed pipelines
-  if (node.timed) {
-    const endTime = _performanceNow();
-    const elapsedSeconds = (endTime - startTime) / 1000;
-    const minutes = Math.floor(elapsedSeconds / 60);
-    const seconds = elapsedSeconds % 60;
-
-    let timingOutput: string;
-    if (node.timePosix) {
-      // POSIX format (-p): decimal format without leading zeros
-      timingOutput = `real ${elapsedSeconds.toFixed(2)}\nuser 0.00\nsys 0.00\n`;
-    } else {
-      // Default bash format: real/user/sys with XmY.YYYs
-      const realStr = `${minutes}m${seconds.toFixed(3)}s`;
-      timingOutput = `\nreal\t${realStr}\nuser\t0m0.000s\nsys\t0m0.000s\n`;
-    }
-
-    lastResult = {
-      ...lastResult,
-      stderr: lastResult.stderr + timingOutput,
-    };
-  }
-
-  // Handle $_ for multi-command pipelines:
-  // - With lastpipe enabled: $_ is set by the last command (already done above)
-  // - Without lastpipe: $_ should be restored to the value before the pipeline
-  //   (since all commands ran in subshells that don't affect parent's $_)
-  if (isMultiCommandPipeline && !ctx.state.shoptOptions.lastpipe) {
+  // Handle $_ restoration
+  if (!ctx.state.shoptOptions.lastpipe) {
     ctx.state.lastArg = savedLastArg;
   }
-  // With lastpipe, the last command already updated $_ in the main shell context
 
+  lastResult = applyNegation(node, lastResult);
+  lastResult = applyTiming(node, lastResult, startTime);
   return lastResult;
+}
+
+/**
+ * Run a single pipeline stage.
+ *
+ * All stages get a StreamContext with writeStdout. Input routing depends
+ * on isStreaming: streaming commands get the raw channel as stdinStream,
+ * non-streaming commands get the channel drained into stdin.
+ *
+ * Output routing is runtime: if result.stdout is non-empty, push it to
+ * the output channel (non-streaming path). If empty, output already went
+ * via writeStdout during execution (streaming path). Commands must not
+ * do both — enforced by assertion in executeExternalCommand.
+ */
+async function runStage(
+  ctx: InterpreterContext,
+  command: CommandNode,
+  executeCommand: ExecuteCommandFn,
+  inputChannel: PipeChannel | null,
+  outputChannel: PipeChannel | null,
+  pipeStderrToNext: boolean,
+  isStreaming: boolean,
+  runsInSubshell: boolean,
+  isFirst: boolean,
+  index: number,
+  groupStdin?: string,
+): Promise<{ result: ExecResult; index: number }> {
+  // Subshell context: save env
+  const savedEnv = runsInSubshell ? new Map(ctx.state.env) : null;
+
+  // Clear $_ for pipeline commands
+  ctx.state.lastArg = "";
+
+  // Set groupStdin for this stage — already cleared by parent for
+  // non-first stages, and passed explicitly for the first stage to
+  // avoid concurrent races on shared state.
+  ctx.state.groupStdin = groupStdin;
+
+  try {
+    // --- Input routing ---
+    // Streaming commands get the raw channel for incremental reads.
+    // Non-streaming commands get the channel drained into a string.
+    // For the first stage with no input channel, groupStdin flows
+    // through as the stdin parameter so inner commands can use it.
+    let stdin = "";
+    if (!isStreaming && inputChannel) {
+      for await (const chunk of inputChannel) {
+        stdin += chunk;
+      }
+    } else if (isFirst && !inputChannel && groupStdin) {
+      stdin = groupStdin;
+    }
+
+    // --- Build StreamContext ---
+    let stageStderr = "";
+    const streamCtx: StreamContext = {
+      writeStdout: outputChannel
+        ? async (chunk: string) => {
+            await outputChannel.write(chunk);
+          }
+        : async (chunk: string) => {
+            streamCtx.collectedStdout =
+              (streamCtx.collectedStdout ?? "") + chunk;
+          },
+      writeStderr: async (chunk: string) => {
+        stageStderr += chunk;
+      },
+      stdinStream: isStreaming ? (inputChannel ?? undefined) : undefined,
+      abortUpstream: () => {
+        if (inputChannel) inputChannel.abort();
+      },
+    };
+
+    // --- Execute ---
+    let result = await executeCommand(command, stdin, streamCtx);
+
+    // --- Output routing ---
+    if (outputChannel) {
+      // Push buffered stdout to channel. Streaming commands return
+      // stdout="" (enforced by assertion in executeExternalCommand),
+      // so this is a no-op for them — their output already went via
+      // writeStdout during execution.
+      try {
+        const output = pipeStderrToNext
+          ? result.stderr + result.stdout
+          : result.stdout;
+        if (output) {
+          await outputChannel.write(output);
+        }
+      } catch (error) {
+        if (error instanceof BrokenPipeError) {
+          outputChannel.close();
+          return {
+            result: {
+              stdout: "",
+              stderr: pipeStderrToNext ? "" : result.stderr,
+              exitCode: 141,
+            },
+            index,
+          };
+        }
+        throw error;
+      }
+      outputChannel.close();
+
+      if (pipeStderrToNext) {
+        return {
+          result: { stdout: "", stderr: "", exitCode: result.exitCode },
+          index,
+        };
+      }
+      return {
+        result: {
+          stdout: "",
+          stderr: stageStderr + result.stderr,
+          exitCode: result.exitCode,
+        },
+        index,
+      };
+    }
+
+    // Last stage — collectedStdout is merged into ExecResult by the
+    // interpreter (before redirections). Merge any streaming stderr here.
+    if (stageStderr) {
+      result = { ...result, stderr: stageStderr + result.stderr };
+    }
+    return { result, index };
+  } catch (error) {
+    // Push any stdout from the error before closing the channel,
+    // so downstream stages still see partial output (e.g., errexit
+    // after some echo statements in a group).
+    if (outputChannel) {
+      if (
+        (error instanceof ErrexitError || error instanceof ExitError) &&
+        error.stdout
+      ) {
+        try {
+          await outputChannel.write(error.stdout);
+        } catch {
+          // Ignore BrokenPipeError — downstream already closed
+        }
+      }
+      outputChannel.close();
+    }
+    throw error;
+  } finally {
+    // Restore env for subshell commands
+    if (savedEnv) {
+      ctx.state.env = savedEnv;
+    }
+  }
+}
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+function setPipestatus(ctx: InterpreterContext, codes: number[]): void {
+  // Clear previous entries
+  for (const key of ctx.state.env.keys()) {
+    if (key.startsWith("PIPESTATUS_")) {
+      ctx.state.env.delete(key);
+    }
+  }
+  for (let i = 0; i < codes.length; i++) {
+    ctx.state.env.set(`PIPESTATUS_${i}`, String(codes[i]));
+  }
+  ctx.state.env.set("PIPESTATUS__length", String(codes.length));
+}
+
+function applyNegation(node: PipelineNode, result: ExecResult): ExecResult {
+  if (node.negated) {
+    return { ...result, exitCode: result.exitCode === 0 ? 1 : 0 };
+  }
+  return result;
+}
+
+function applyTiming(
+  node: PipelineNode,
+  result: ExecResult,
+  startTime: number,
+): ExecResult {
+  if (!node.timed) return result;
+
+  const endTime = _performanceNow();
+  const elapsedSeconds = (endTime - startTime) / 1000;
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+
+  let timingOutput: string;
+  if (node.timePosix) {
+    timingOutput = `real ${elapsedSeconds.toFixed(2)}\nuser 0.00\nsys 0.00\n`;
+  } else {
+    const realStr = `${minutes}m${seconds.toFixed(3)}s`;
+    timingOutput = `\nreal\t${realStr}\nuser\t0m0.000s\nsys\t0m0.000s\n`;
+  }
+
+  return { ...result, stderr: result.stderr + timingOutput };
 }
