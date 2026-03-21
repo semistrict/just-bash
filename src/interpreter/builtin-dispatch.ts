@@ -516,11 +516,13 @@ export async function executeExternalCommand(
       dispatchCtx.streamCtx?.writeStdout ??
       (async (chunk: string): Promise<void> => {
         standaloneCollector.stdout += chunk;
+        dispatchCtx.ctx.outputChunkSink?.({ stdout: chunk });
       }),
     writeStderr:
       dispatchCtx.streamCtx?.writeStderr ??
       (async (chunk: string): Promise<void> => {
         standaloneCollector.stderr += chunk;
+        dispatchCtx.ctx.outputChunkSink?.({ stderr: chunk });
       }),
     stdinStream:
       dispatchCtx.streamCtx?.stdinStream ??

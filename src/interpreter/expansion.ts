@@ -774,7 +774,9 @@ async function expandPart(
       // Null out outputSink inside command substitutions —
       // $() output is captured, not streamed to the caller.
       const savedOutputSink = ctx.outputSink;
+      const savedOutputChunkSink = ctx.outputChunkSink;
       ctx.outputSink = undefined;
+      ctx.outputChunkSink = undefined;
       try {
         const result = await ctx.executeScript(part.body);
         // Restore environment but preserve exit code
@@ -783,6 +785,7 @@ async function expandPart(
         ctx.state.cwd = savedCwd;
         ctx.state.suppressVerbose = savedSuppressVerbose;
         ctx.outputSink = savedOutputSink;
+        ctx.outputChunkSink = savedOutputChunkSink;
         // Store the exit code for $?
         ctx.state.lastExitCode = exitCode;
         ctx.state.env.set("?", String(exitCode));
@@ -810,6 +813,7 @@ async function expandPart(
         ctx.substitutionDepth = savedDepth;
         ctx.state.suppressVerbose = savedSuppressVerbose;
         ctx.outputSink = savedOutputSink;
+        ctx.outputChunkSink = savedOutputChunkSink;
         // ExecutionLimitError must always propagate - these are safety limits
         if (error instanceof ExecutionLimitError) {
           throw error;

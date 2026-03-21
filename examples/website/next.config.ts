@@ -7,7 +7,7 @@ import type { NextConfig } from "next";
 // - *.pusher.com is for Vercel toolbar real-time features
 const cspHeader = `
   default-src 'self';
-  script-src 'self' 'unsafe-inline' https://vercel.live;
+  script-src 'self' 'unsafe-inline' 'unsafe-eval' https://vercel.live;
   style-src 'self' 'unsafe-inline' https://vercel.live;
   img-src 'self' data: blob: https://vercel.live https://vercel.com https://*.vercel.com;
   font-src 'self' https://vercel.live https://assets.vercel.com;
@@ -21,9 +21,7 @@ const cspHeader = `
   .trim();
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["just-bash"],
   outputFileTracingIncludes: {
-    "/api/agent": ["./app/api/agent/_agent-data/**/*"],
     "/api/fs": ["./app/api/agent/_agent-data/**/*"],
   },
   headers: async () => [

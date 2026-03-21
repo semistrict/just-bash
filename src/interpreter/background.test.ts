@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Bash } from "../Bash.js";
+import { defineCommand } from "../custom-commands.js";
 import { FakeClock } from "../testing/fake-clock.js";
 
 /**
@@ -1102,6 +1103,101 @@ describe("background execution", () => {
       const allStreamed = chunks.map((c) => c.stdout).join("");
       expect(allStreamed).toBe("deep\n");
       // "deep" should only appear once — from the outer echo
+    });
+  });
+
+  describe("execStream", () => {
+    it("streams non-streaming command output per statement", async () => {
+      const bash = new Bash();
+      const stream = bash.execStream("echo hello; echo world");
+      const chunks: Array<{ stdout?: string; stderr?: string }> = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      const result = await stream.result;
+      const allStdout = chunks
+        .map((c) => c.stdout ?? "")
+        .join("");
+      expect(allStdout).toBe("hello\nworld\n");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("hello\nworld\n");
+    });
+
+    it("streams writeStdout chunks from a streaming custom command", async () => {
+      const streamer = defineCommand("streamer", async (_args, ctx) => {
+        await ctx.writeStdout("chunk1\n");
+        await ctx.writeStdout("chunk2\n");
+        await ctx.writeStdout("chunk3\n");
+        return { stdout: "", stderr: "", exitCode: 0 };
+      });
+      (streamer as { streaming?: boolean }).streaming = true;
+      const bash = new Bash({ customCommands: [streamer] });
+      const stream = bash.execStream("streamer");
+      const chunks: Array<{ stdout?: string; stderr?: string }> = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      const result = await stream.result;
+      const stdoutChunks = chunks.filter((c) => c.stdout);
+      expect(stdoutChunks.length).toBe(3);
+      expect(stdoutChunks[0].stdout).toBe("chunk1\n");
+      expect(stdoutChunks[1].stdout).toBe("chunk2\n");
+      expect(stdoutChunks[2].stdout).toBe("chunk3\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("streams stderr chunks", async () => {
+      const bash = new Bash();
+      const stream = bash.execStream("echo err >&2");
+      const chunks: Array<{ stdout?: string; stderr?: string }> = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      const stderrContent = chunks
+        .map((c) => c.stderr ?? "")
+        .join("");
+      expect(stderrContent).toContain("err");
+    });
+
+    it("result promise resolves with exit code", async () => {
+      const bash = new Bash();
+      const stream = bash.execStream("exit 42");
+      for await (const _chunk of stream) {
+        // drain
+      }
+      const result = await stream.result;
+      expect(result.exitCode).toBe(42);
+    });
+
+    it("does not duplicate output for streaming commands", async () => {
+      const streamer = defineCommand("streamer", async (_args, ctx) => {
+        await ctx.writeStdout("only-once\n");
+        return { stdout: "", stderr: "", exitCode: 0 };
+      });
+      (streamer as { streaming?: boolean }).streaming = true;
+      const bash = new Bash({ customCommands: [streamer] });
+      const stream = bash.execStream("streamer");
+      const chunks: Array<{ stdout?: string; stderr?: string }> = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      const allStdout = chunks
+        .map((c) => c.stdout ?? "")
+        .join("");
+      expect(allStdout).toBe("only-once\n");
+    });
+
+    it("command substitution does not leak through execStream", async () => {
+      const bash = new Bash();
+      const stream = bash.execStream('x=$(echo inner); echo "outer: $x"');
+      const chunks: Array<{ stdout?: string; stderr?: string }> = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      const allStdout = chunks
+        .map((c) => c.stdout ?? "")
+        .join("");
+      expect(allStdout).toBe("outer: inner\n");
     });
   });
 

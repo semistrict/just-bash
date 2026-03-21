@@ -144,6 +144,8 @@ export interface InterpreterOptions {
   pyodideAssets?: PyodideAssets;
   /** Optional streaming output callback */
   outputSink?: (chunk: { stdout: string; stderr: string }) => void;
+  /** Optional per-chunk output callback for real-time streaming */
+  outputChunkSink?: (chunk: { stdout?: string; stderr?: string }) => void;
 }
 
 export class Interpreter {
@@ -167,6 +169,7 @@ export class Interpreter {
       jsBootstrapCode: options.jsBootstrapCode,
       pyodideAssets: options.pyodideAssets,
       outputSink: options.outputSink,
+      outputChunkSink: options.outputChunkSink,
     };
   }
 

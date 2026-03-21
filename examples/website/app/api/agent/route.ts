@@ -1,21 +1,16 @@
-import { ToolLoopAgent, createAgentUIStreamResponse, stepCountIs } from "ai";
-import { createBashTool } from "bash-tool";
-import { Bash, OverlayFs } from "just-bash";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import {
+  convertToModelMessages,
+  streamText,
+  type UIMessage,
+} from "ai";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { z } from "zod";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const AGENT_DATA_DIR = join(__dirname, "./_agent-data");
+const openrouter = createOpenRouter();
 
 const SYSTEM_INSTRUCTIONS = `You are an expert on just-bash, a TypeScript bash interpreter with an in-memory virtual filesystem.
 
-You have access to a bash sandbox with the full source code of:
-- just-bash/ - The main bash interpreter
-- bash-tool/ - AI SDK tool for bash
-
-
-Refer to the README.md of the projects to answer questions about just-bash and bash-tool 
-themselves which is your main focus. Never talk about this demo implementation unless asked explicitly.
+You have access to a bash sandbox with the source code of just-bash and bash-tool.
 
 Use the sandbox to explore the source code, demonstrate commands, and help users understand:
 - How to use just-bash and bash-tool
@@ -34,28 +29,22 @@ Use cat to read files. Use head, tail to read parts of large files.
 Keep responses concise. You do not have access to pnpm, npm, or node.`;
 
 export async function POST(req: Request) {
-  const { messages } = await req.json();
-  const lastUserMessage = messages.filter((m: { role: string }) => m.role === "user").pop();
-  console.log("Prompt:", lastUserMessage?.parts?.[0]?.text);
-  const overlayFs = new OverlayFs({ root: AGENT_DATA_DIR, readOnly: true });
-  const sandbox = new Bash({ fs: overlayFs, cwd: overlayFs.getMountPoint() });
-  const bashToolkit = await createBashTool({
-    sandbox,
-    destination: overlayFs.getMountPoint(),
-  });
+  const { messages }: { messages: UIMessage[] } = await req.json();
 
-  // Create a fresh agent per request for proper streaming
-  const agent = new ToolLoopAgent({
-    model: "claude-haiku-4-5",
-    instructions: SYSTEM_INSTRUCTIONS,
+  const result = streamText({
+    model: openrouter("openai/gpt-5.4-mini"),
+    system: SYSTEM_INSTRUCTIONS,
+    messages: await convertToModelMessages(messages),
     tools: {
-      bash: bashToolkit.tools.bash,
+      bash: {
+        description: "Execute a bash command in the sandbox",
+        inputSchema: z.object({
+          command: z.string().describe("The bash command to execute"),
+        }),
+        // No execute — tool calls are resolved client-side
+      },
     },
-    stopWhen: stepCountIs(20),
   });
 
-  return createAgentUIStreamResponse({
-    agent,
-    uiMessages: messages,
-  });
+  return result.toUIMessageStreamResponse();
 }

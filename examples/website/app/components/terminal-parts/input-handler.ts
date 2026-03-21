@@ -272,12 +272,15 @@ export function createInputHandler(term: Terminal, bash: Bash) {
     if (trimmed === "clear") {
       term.write("\x1b[2J\x1b[3J\x1b[H");
     } else {
-      const result = await bash.exec(trimmed);
-      if (result.stdout)
-        term.write(
-          formatMarkdown(colorizeUrls(result.stdout)).replace(/\n/g, "\r\n")
-        );
-      if (result.stderr) term.write(result.stderr.replace(/\n/g, "\r\n"));
+      const stream = bash.execStream(trimmed);
+      for await (const chunk of stream) {
+        if (chunk.stdout)
+          term.write(
+            formatMarkdown(colorizeUrls(chunk.stdout)).replace(/\n/g, "\r\n")
+          );
+        if (chunk.stderr) term.write(chunk.stderr.replace(/\n/g, "\r\n"));
+      }
+      await stream.result;
     }
 
     cmd = "";

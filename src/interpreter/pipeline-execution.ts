@@ -359,9 +359,13 @@ async function runStage(
         : async (chunk: string) => {
             streamCtx.collectedStdout =
               (streamCtx.collectedStdout ?? "") + chunk;
+            ctx.outputChunkSink?.({ stdout: chunk });
           },
       writeStderr: async (chunk: string) => {
         stageStderr += chunk;
+        if (!outputChannel) {
+          ctx.outputChunkSink?.({ stderr: chunk });
+        }
       },
       stdinStream: isStreaming ? (inputChannel ?? undefined) : undefined,
       abortUpstream: () => {
@@ -415,6 +419,12 @@ async function runStage(
         },
         index,
       };
+    }
+
+    // Last stage: forward non-streaming stdout through outputChunkSink.
+    // Streaming commands already forwarded via writeStdout above.
+    if (ctx.outputChunkSink && result.stdout && streamCtx.collectedStdout == null) {
+      ctx.outputChunkSink({ stdout: result.stdout });
     }
 
     // Last stage — collectedStdout is merged into ExecResult by the

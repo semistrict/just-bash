@@ -47,7 +47,7 @@ export default function TerminalComponent() {
 
     // Create commands
     const { aboutCmd, installCmd, githubCmd } = createStaticCommands();
-    const agentCmd = createAgentCommand(term);
+    const agentCmd = createAgentCommand();
 
     // Files from DOM
     const files = {

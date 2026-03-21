@@ -11,6 +11,7 @@ export type {
   BashLogger,
   BashOptions,
   ExecOptions,
+  ExecStream,
   JavaScriptConfig,
 } from "./Bash.js";
 export { Bash } from "./Bash.js";

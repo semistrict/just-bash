@@ -285,6 +285,17 @@ export interface ExecOptions {
   waitForBackgroundJobs?: boolean;
 }
 
+/**
+ * Async iterable of output chunks from execStream().
+ * Iterate to receive stdout/stderr chunks in real time.
+ * Access `.result` for the final BashExecResult after iteration.
+ */
+export interface ExecStream
+  extends AsyncIterable<{ stdout?: string; stderr?: string }> {
+  /** Resolves with the final result when execution completes. */
+  result: Promise<BashExecResult>;
+}
+
 export class Bash {
   readonly fs: IFileSystem;
   private commands: CommandRegistry = new Map();
@@ -698,6 +709,14 @@ export class Bash {
           jsBootstrapCode: this.jsBootstrapCode,
           pyodideAssets: this.pyodideAssets,
           outputSink: options?.onOutput,
+          outputChunkSink: (
+            options as ExecOptions & {
+              _outputChunkSink?: (chunk: {
+                stdout?: string;
+                stderr?: string;
+              }) => void;
+            }
+          )?._outputChunkSink,
         };
 
         const interpreter = new Interpreter(interpreterOptions, execState);
@@ -829,6 +848,125 @@ export class Bash {
   // biome-ignore lint/suspicious/noExplicitAny: accepts any plugin for untyped API
   registerTransformPlugin(plugin: TransformPlugin<any>): void {
     this.transformPlugins.push(plugin);
+  }
+
+  /**
+   * Execute a command and return an async iterable of output chunks.
+   * Each chunk contains either stdout or stderr (or both) as they are
+   * produced. The final BashExecResult is available via the `result` property.
+   *
+   * This enables real-time streaming for long-running commands that use
+   * writeStdout (e.g., custom commands that stream SSE responses).
+   * Non-streaming commands (echo, ls) also work — their output arrives
+   * as a single chunk when the statement completes.
+   *
+   * @example
+   * ```ts
+   * const stream = bash.execStream("my-streaming-command");
+   * for await (const chunk of stream) {
+   *   if (chunk.stdout) process.stdout.write(chunk.stdout);
+   *   if (chunk.stderr) process.stderr.write(chunk.stderr);
+   * }
+   * const { exitCode } = await stream.result;
+   * ```
+   */
+  execStream(
+    commandLine: string,
+    options?: Omit<ExecOptions, "onOutput">,
+  ): ExecStream {
+    // Simple async queue: producer pushes chunks, consumer iterates.
+    const queue: Array<{ stdout?: string; stderr?: string }> = [];
+    let done = false;
+    let readResolve:
+      | ((
+          value: IteratorResult<{ stdout?: string; stderr?: string }, undefined>,
+        ) => void)
+      | null = null;
+
+    const push = (chunk: { stdout?: string; stderr?: string }) => {
+      if (done) return;
+      if (readResolve) {
+        const resolve = readResolve;
+        readResolve = null;
+        resolve({ value: chunk, done: false });
+      } else {
+        queue.push(chunk);
+      }
+    };
+
+    const close = () => {
+      done = true;
+      if (readResolve) {
+        const resolve = readResolve;
+        readResolve = null;
+        resolve({ value: undefined as undefined, done: true });
+      }
+    };
+
+    // Track whether outputChunkSink was called for the current statement.
+    // When it was, the per-statement onOutput is suppressed to avoid dupes.
+    let chunkedThisStatement = false;
+
+    const resultPromise = this.exec(commandLine, {
+      ...options,
+      onOutput: (chunk) => {
+        if (!chunkedThisStatement) {
+          // Non-streaming command — forward the statement result
+          if (chunk.stdout) push({ stdout: chunk.stdout });
+          if (chunk.stderr) push({ stderr: chunk.stderr });
+        }
+        chunkedThisStatement = false;
+      },
+      // outputChunkSink is wired via a private option
+      _outputChunkSink: (chunk: { stdout?: string; stderr?: string }) => {
+        chunkedThisStatement = true;
+        push(chunk);
+      },
+    } as ExecOptions & {
+      _outputChunkSink: (chunk: { stdout?: string; stderr?: string }) => void;
+    }).then(
+      (result) => {
+        close();
+        return result;
+      },
+      (error) => {
+        close();
+        throw error;
+      },
+    );
+
+    const iterator: AsyncIterableIterator<{
+      stdout?: string;
+      stderr?: string;
+    }> = {
+      next: () => {
+        if (queue.length > 0) {
+          return Promise.resolve({
+            value: queue.shift()!,
+            done: false,
+          });
+        }
+        if (done) {
+          return Promise.resolve({
+            value: undefined as undefined,
+            done: true,
+          });
+        }
+        return new Promise((resolve) => {
+          readResolve = resolve;
+        });
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+
+    return {
+      [Symbol.asyncIterator]() {
+        return iterator;
+      },
+      result: resultPromise,
+    };
   }
 
   transform(commandLine: string): BashTransformResult {

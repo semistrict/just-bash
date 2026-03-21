@@ -458,6 +458,16 @@ export interface JobControlState {
  */
 export type OutputSink = (chunk: { stdout: string; stderr: string }) => void;
 
+/**
+ * Callback for per-chunk streaming output.
+ * Called every time writeStdout/writeStderr is invoked in the last pipeline stage,
+ * enabling real-time streaming for long-running commands.
+ */
+export type OutputChunkSink = (chunk: {
+  stdout?: string;
+  stderr?: string;
+}) => void;
+
 export interface InterpreterContext {
   state: InterpreterState;
   fs: IFileSystem;
@@ -506,4 +516,10 @@ export interface InterpreterContext {
    * Nulled out inside command substitutions to prevent leaking internal output.
    */
   outputSink?: OutputSink;
+  /**
+   * Optional per-chunk output callback.
+   * Called from the last pipeline stage's writeStdout/writeStderr for real-time streaming.
+   * Nulled out inside command substitutions (same as outputSink).
+   */
+  outputChunkSink?: OutputChunkSink;
 }
