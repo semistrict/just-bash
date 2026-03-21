@@ -82,7 +82,11 @@ export interface FsStat {
   mode: number;
   size: number;
   mtime: Date;
+  ino?: number;
 }
+
+/** Opaque file handle — returned by open(), used for all file I/O. */
+export type FilePtr = number;
 
 /**
  * Options for mkdir operation
@@ -278,6 +282,42 @@ export interface IFileSystem {
     path: string,
     options?: { chunkSize?: number; encoding?: "binary" },
   ): AsyncIterable<string>;
+}
+
+/**
+ * Synchronous filesystem access for use in contexts that cannot await
+ * (e.g., Emscripten FS callbacks called from WASM).
+ *
+ * Both InMemoryFs and SqliteFs are synchronous under the hood — the async
+ * IFileSystem methods are just wrappers. This interface exposes the
+ * synchronous reality for callers that need it.
+ */
+export interface SyncFs {
+  existsSync(path: string): boolean;
+  lstatSync(path: string): FsStat;
+  readFileBufferSync(path: string): Uint8Array;
+  writeFileSync(path: string, content: FileContent): void;
+  mkdirSync(path: string, options?: MkdirOptions): void;
+  rmSync(path: string, options?: RmOptions): void;
+  readdirSync(path: string): string[];
+  chmodSync(path: string, mode: number): void;
+  symlinkSync(target: string, linkPath: string): void;
+  readlinkSync(path: string): string;
+  mvSync(src: string, dest: string): void;
+
+  // ── File I/O (mirrors Emscripten stream_ops) ───────────
+  /** Resolve path, increment refcount, return handle. */
+  open(path: string, flags: number): FilePtr;
+  /** Decrement refcount. Frees backing data if unlinked and refcount hits 0. */
+  close(ptr: FilePtr): void;
+  /** Read bytes at position. Returns bytes read (may be < length at EOF). */
+  read(ptr: FilePtr, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  /** Write bytes at position. Grows file if needed. Returns bytes written. */
+  write(ptr: FilePtr, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  /** Get file size (for SEEK_END). */
+  fstat(ptr: FilePtr): { size: number };
+  /** Truncate or extend file. */
+  ftruncate(ptr: FilePtr, size: number): void;
 }
 
 /**

@@ -1,10 +1,10 @@
 /**
- * html-to-markdown - Convert HTML to Markdown using TurndownService
+ * html-to-markdown - Convert HTML to Markdown
  *
- * This is a non-standard command that converts HTML from stdin to Markdown.
+ * Pure JS implementation — no external dependencies (CF Workers compatible).
+ * Uses regex-based parsing (not a DOM parser) so it works in any JS runtime.
  */
 
-import TurndownService from "turndown";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
@@ -13,7 +13,7 @@ const htmlToMarkdownHelp = {
   summary: "convert HTML to Markdown (BashEnv extension)",
   usage: "html-to-markdown [OPTION]... [FILE]",
   description: [
-    "Convert HTML content to Markdown format using the turndown library.",
+    "Convert HTML content to Markdown format.",
     "This is a non-standard BashEnv extension command, not available in regular bash.",
     "",
     "Read HTML from FILE or standard input and output Markdown to standard output.",
@@ -47,6 +47,133 @@ const htmlToMarkdownHelp = {
     "curl -s https://example.com | html-to-markdown > page.md",
   ],
 };
+
+interface ConvertOptions {
+  bullet: string;
+  codeFence: string;
+  hr: string;
+  headingStyle: "atx" | "setext";
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+
+function getAttr(tag: string, attr: string): string {
+  const re = new RegExp(`${attr}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|(\\S+))`, "i");
+  const m = tag.match(re);
+  return m ? (m[1] ?? m[2] ?? m[3] ?? "") : "";
+}
+
+function convertHtml(html: string, opts: ConvertOptions): string {
+  let s = html;
+
+  // Strip script, style, footer entirely
+  s = s.replace(/<(script|style|footer)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+
+  // Strip HTML comments
+  s = s.replace(/<!--[\s\S]*?-->/g, "");
+
+  // Images → ![alt](src)
+  s = s.replace(/<img\b([^>]*)\/?\s*>/gi, (_, attrs) => {
+    const alt = getAttr(attrs, "alt");
+    const src = getAttr(attrs, "src");
+    return src ? `![${alt}](${src})` : "";
+  });
+
+  // Links → [text](href)
+  s = s.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (_, attrs, text) => {
+    const href = getAttr(attrs, "href");
+    const inner = text.replace(/<[^>]+>/g, "").trim();
+    return href ? `[${inner}](${href})` : inner;
+  });
+
+  // Pre/code blocks → fenced code
+  s = s.replace(/<pre\b[^>]*>\s*<code\b([^>]*)>([\s\S]*?)<\/code>\s*<\/pre>/gi, (_, attrs, code) => {
+    const lang = getAttr(attrs, "class").replace(/^language-/, "");
+    const decoded = decodeEntities(code).replace(/<[^>]+>/g, "").trim();
+    return `\n\n${opts.codeFence}${lang}\n${decoded}\n${opts.codeFence}\n\n`;
+  });
+  s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_, code) => {
+    const decoded = decodeEntities(code).replace(/<[^>]+>/g, "").trim();
+    return `\n\n${opts.codeFence}\n${decoded}\n${opts.codeFence}\n\n`;
+  });
+
+  // Inline code
+  s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_, code) => {
+    return `\`${decodeEntities(code).replace(/<[^>]+>/g, "")}\``;
+  });
+
+  // Headings
+  s = s.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, text) => {
+    const inner = text.replace(/<[^>]+>/g, "").trim();
+    const n = parseInt(level, 10);
+    if (opts.headingStyle === "setext" && n <= 2) {
+      const underline = n === 1 ? "=" : "-";
+      return `\n\n${inner}\n${underline.repeat(inner.length)}\n\n`;
+    }
+    return `\n\n${"#".repeat(n)} ${inner}\n\n`;
+  });
+
+  // Blockquotes
+  s = s.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) => {
+    const inner = content.replace(/<[^>]+>/g, "").trim();
+    return "\n\n" + inner.split("\n").map((l: string) => `> ${l}`).join("\n") + "\n\n";
+  });
+
+  // Ordered lists
+  s = s.replace(/<ol\b[^>]*>([\s\S]*?)<\/ol>/gi, (_, items) => {
+    let i = 0;
+    const result = items.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_: string, text: string) => {
+      i++;
+      return `${i}. ${text.replace(/<[^>]+>/g, "").trim()}\n`;
+    });
+    return `\n\n${result.replace(/<[^>]+>/g, "").trim()}\n\n`;
+  });
+
+  // Unordered lists
+  s = s.replace(/<ul\b[^>]*>([\s\S]*?)<\/ul>/gi, (_, items) => {
+    const result = items.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_: string, text: string) => {
+      return `${opts.bullet} ${text.replace(/<[^>]+>/g, "").trim()}\n`;
+    });
+    return `\n\n${result.replace(/<[^>]+>/g, "").trim()}\n\n`;
+  });
+
+  // Bold
+  s = s.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, text) => `**${text.replace(/<[^>]+>/g, "")}**`);
+
+  // Italic
+  s = s.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _tag, text) => `_${text.replace(/<[^>]+>/g, "")}_`);
+
+  // Horizontal rules
+  s = s.replace(/<hr\b[^>]*\/?>/gi, `\n\n${opts.hr}\n\n`);
+
+  // Line breaks
+  s = s.replace(/<br\s*\/?>/gi, "\n");
+
+  // Paragraphs and divs → newlines
+  s = s.replace(/<\/?(p|div)\b[^>]*>/gi, "\n\n");
+
+  // Strip remaining tags
+  s = s.replace(/<[^>]+>/g, "");
+
+  // Decode entities
+  s = decodeEntities(s);
+
+  // Collapse whitespace: max 2 consecutive newlines
+  s = s.replace(/\n{3,}/g, "\n\n");
+  s = s.trim();
+
+  return s;
+}
 
 export const htmlToMarkdownCommand: Command = {
   name: "html-to-markdown",
@@ -114,18 +241,7 @@ export const htmlToMarkdownCommand: Command = {
     }
 
     try {
-      const turndownService = new TurndownService({
-        bulletListMarker: bullet as "-" | "+" | "*",
-        codeBlockStyle: "fenced",
-        fence: codeFence as "```" | "~~~",
-        hr,
-        headingStyle,
-      });
-
-      // Remove script and style elements entirely (including their content)
-      turndownService.remove(["script", "style", "footer"]);
-
-      const markdown = turndownService.turndown(input).trim();
+      const markdown = convertHtml(input, { bullet, codeFence, hr, headingStyle });
       return {
         stdout: `${markdown}\n`,
         stderr: "",

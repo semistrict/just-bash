@@ -37,6 +37,7 @@ import type {
   CommandRegistry,
   ExecResult,
   FeatureCoverageWriter,
+  PyodideAssets,
   TraceCallback,
 } from "../types.js";
 import { expandAlias as expandAliasHelper } from "./alias-expansion.js";
@@ -139,6 +140,8 @@ export interface InterpreterOptions {
   requireDefenseContext?: boolean;
   /** Bootstrap JavaScript code for js-exec */
   jsBootstrapCode?: string;
+  /** Optional Pyodide asset overrides from the embedding shell. */
+  pyodideAssets?: PyodideAssets;
   /** Optional streaming output callback */
   outputSink?: (chunk: { stdout: string; stderr: string }) => void;
 }
@@ -162,6 +165,7 @@ export class Interpreter {
       coverage: options.coverage,
       requireDefenseContext: options.requireDefenseContext ?? false,
       jsBootstrapCode: options.jsBootstrapCode,
+      pyodideAssets: options.pyodideAssets,
       outputSink: options.outputSink,
     };
   }

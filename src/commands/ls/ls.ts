@@ -442,7 +442,7 @@ async function listPath(
               fullPath === "/" ? `/${entry}` : `${fullPath}/${entry}`;
             try {
               const entryStat = await ctx.fs.stat(entryPath);
-              const mode = entryStat.isDirectory ? "drwxr-xr-x" : "-rw-r--r--";
+              const mode = formatMode(entryStat);
               const suffix = classifyFiles
                 ? classifySuffix(await ctx.fs.lstat(entryPath))
                 : entryStat.isDirectory

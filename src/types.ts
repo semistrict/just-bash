@@ -10,6 +10,18 @@ export interface FeatureCoverageWriter {
   hit(feature: string): void;
 }
 
+export interface PyodideAssets {
+  functionAdapterModules?: Record<string, WebAssembly.Module>;
+  indexURL?: string;
+  initWasm?: (
+    imports: WebAssembly.Imports,
+  ) => Promise<WebAssembly.Instance>;
+  lockFileContents: string | Promise<unknown>;
+  sentinelModule?: WebAssembly.Module;
+  stdLibURL: string | Uint8Array | ArrayBuffer;
+  wasmModule?: WebAssembly.Module;
+}
+
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -189,6 +201,11 @@ export interface CommandContext {
    * user access/injection via environment variables.
    */
   jsBootstrapCode?: string;
+  /**
+   * Optional Pyodide asset overrides for worker runtimes that need the
+   * consuming app to own the asset graph.
+   */
+  pyodideAssets?: PyodideAssets;
   /**
    * Virtual process table for the `ps` command.
    * Populated from the job table when building the command context.

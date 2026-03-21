@@ -47,6 +47,7 @@ export type {
   MkdirOptions,
   RmOptions,
   SymlinkEntry,
+  SyncFs,
 } from "./fs/interface.js";
 export {
   MountableFs,

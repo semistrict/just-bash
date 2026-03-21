@@ -492,6 +492,7 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
 // tar, yq, xan, and sqlite3 don't work in browsers
 // __BROWSER__ is defined by esbuild at build time for browser bundles
 declare const __BROWSER__: boolean | undefined;
+declare const __JUST_BASH_CLOUDFLARE__: boolean | undefined;
 if (typeof __BROWSER__ === "undefined" || !__BROWSER__) {
   commandLoaders.push({
     name: "tar" as CommandName,
@@ -511,11 +512,14 @@ if (typeof __BROWSER__ === "undefined" || !__BROWSER__) {
   });
 }
 
-// Python commands - only registered when python is explicitly enabled
-// These introduce additional security surface (arbitrary code execution)
+// Python commands - only registered when python is explicitly enabled.
+// The inline Pyodide implementation works in browser/worker runtimes too.
 const pythonCommandLoaders: LazyCommandDef<PythonCommandName>[] = [];
-// __BROWSER__ is defined by esbuild at build time for browser bundles
-if (typeof __BROWSER__ === "undefined" || !__BROWSER__) {
+if (
+  (typeof __BROWSER__ === "undefined" || !__BROWSER__) ||
+  (typeof __JUST_BASH_CLOUDFLARE__ !== "undefined" &&
+    __JUST_BASH_CLOUDFLARE__)
+) {
   pythonCommandLoaders.push({
     name: "python3",
     streaming: true,

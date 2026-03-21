@@ -71,6 +71,7 @@ import type {
   Command,
   CommandRegistry,
   FeatureCoverageWriter,
+  PyodideAssets,
   TraceCallback,
 } from "./types.js";
 
@@ -90,6 +91,11 @@ export interface BashLogger {
 export interface JavaScriptConfig {
   /** Bootstrap JavaScript code to run before user scripts */
   bootstrap?: string;
+}
+
+export interface PythonConfig {
+  /** Optional Pyodide asset overrides supplied by the embedding app. */
+  assets?: PyodideAssets;
 }
 
 export interface BashOptions {
@@ -131,7 +137,7 @@ export interface BashOptions {
    * Python is disabled by default as it introduces additional security surface
    * (arbitrary code execution via CPython Emscripten).
    */
-  python?: boolean;
+  python?: boolean | PythonConfig;
   /**
    * Enable js-exec command for sandboxed JavaScript execution via QuickJS.
    * Disabled by default. Can be a boolean or a config object with bootstrap code.
@@ -291,6 +297,7 @@ export class Bash {
   private defenseInDepthConfig?: DefenseInDepthConfig | boolean;
   private coverageWriter?: FeatureCoverageWriter;
   private jsBootstrapCode?: string;
+  private pyodideAssets?: PyodideAssets;
   // biome-ignore lint/suspicious/noExplicitAny: type-erased plugin storage for untyped API
   private transformPlugins: TransformPlugin<any>[] = [];
 
@@ -460,6 +467,13 @@ export class Bash {
     if (options.python) {
       for (const cmd of createPythonCommands()) {
         this.registerCommand(cmd);
+      }
+      const pythonConfig =
+        typeof options.python === "object"
+          ? options.python
+          : Object.create(null);
+      if (pythonConfig.assets) {
+        this.pyodideAssets = pythonConfig.assets;
       }
     }
 
@@ -682,6 +696,7 @@ export class Bash {
           coverage: this.coverageWriter,
           requireDefenseContext: defenseBox?.isEnabled() === true,
           jsBootstrapCode: this.jsBootstrapCode,
+          pyodideAssets: this.pyodideAssets,
           outputSink: options?.onOutput,
         };
 

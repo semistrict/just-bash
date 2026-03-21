@@ -506,6 +506,7 @@ export async function executeExternalCommand(
     signal: ctx.state.signal,
     requireDefenseContext: ctx.requireDefenseContext,
     jsBootstrapCode: ctx.jsBootstrapCode,
+    pyodideAssets: ctx.pyodideAssets,
     processTable,
     // writeStdout/writeStderr are always real. In a pipeline, they come
     // from StreamContext. Outside a pipeline, they collect into

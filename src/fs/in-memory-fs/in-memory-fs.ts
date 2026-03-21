@@ -7,6 +7,7 @@ import type {
   FileContent,
   FileEntry,
   FileInit,
+  FilePtr,
   FsEntry,
   FsStat,
   IFileSystem,
@@ -16,6 +17,7 @@ import type {
   MkdirOptions,
   ReadFileOptions,
   RmOptions,
+  SyncFs,
   SymlinkEntry,
   WriteFileOptions,
 } from "../interface.js";
@@ -66,8 +68,15 @@ function isFileInit(
   );
 }
 
-export class InMemoryFs implements IFileSystem {
+export class InMemoryFs implements IFileSystem, SyncFs {
   private data: Map<string, FsEntry> = new Map();
+
+  // ── Inode infrastructure for FilePtr-based I/O ──
+  private nextInode = 1;
+  private inodeData = new Map<number, Uint8Array>();
+  private pathToInode = new Map<string, number>();
+  private ptrRefs = new Map<number, number>();
+  private orphanedInodes = new Set<number>();
 
   constructor(initialFiles?: InitialFiles) {
     // Create root directory
@@ -110,6 +119,18 @@ export class InMemoryFs implements IFileSystem {
     }
   }
 
+  /** Allocate or reuse an inode for a path, store data in inodeData. */
+  private assignInode(normalized: string, buffer: Uint8Array): void {
+    const existing = this.pathToInode.get(normalized);
+    if (existing !== undefined) {
+      this.inodeData.set(existing, buffer);
+    } else {
+      const ino = this.nextInode++;
+      this.pathToInode.set(normalized, ino);
+      this.inodeData.set(ino, buffer);
+    }
+  }
+
   // Sync method for writing files
   writeFileSync(
     path: string,
@@ -124,6 +145,8 @@ export class InMemoryFs implements IFileSystem {
     // Store content - convert to Uint8Array for internal storage
     const encoding = getEncoding(options);
     const buffer = toBuffer(content, encoding);
+
+    this.assignInode(normalized, buffer);
 
     this.data.set(normalized, {
       type: "file",
@@ -779,5 +802,380 @@ export class InMemoryFs implements IFileSystem {
 
     // Update mtime on the entry
     entry.mtime = mtime;
+  }
+
+  // --- SyncFs implementation ---
+
+  existsSync(path: string): boolean {
+    if (path.includes("\0")) return false;
+    try {
+      const resolvedPath = this.resolvePathWithSymlinks(path);
+      return this.data.has(resolvedPath);
+    } catch {
+      return false;
+    }
+  }
+
+  lstatSync(path: string): FsStat {
+    validatePath(path, "lstat");
+    const resolvedPath = this.resolveIntermediateSymlinks(path);
+    const entry = this.data.get(resolvedPath);
+
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory, lstat '${path}'`);
+    }
+
+    if (entry.type === "symlink") {
+      return {
+        isFile: false,
+        isDirectory: false,
+        isSymbolicLink: true,
+        mode: entry.mode,
+        size: entry.target.length,
+        mtime: entry.mtime || new Date(),
+      };
+    }
+
+    let size = 0;
+    if (entry.type === "file" && "content" in entry && entry.content) {
+      if (entry.content instanceof Uint8Array) {
+        size = entry.content.length;
+      } else {
+        size = textEncoder.encode(entry.content).length;
+      }
+    }
+
+    return {
+      isFile: entry.type === "file",
+      isDirectory: entry.type === "directory",
+      isSymbolicLink: false,
+      mode: entry.mode,
+      size,
+      mtime: entry.mtime || new Date(),
+    };
+  }
+
+  readFileBufferSync(path: string): Uint8Array {
+    validatePath(path, "open");
+    const resolvedPath = this.resolvePathWithSymlinks(path);
+    const entry = this.data.get(resolvedPath);
+
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+    }
+    if (entry.type !== "file") {
+      throw new Error(`EISDIR: illegal operation on a directory, read '${path}'`);
+    }
+
+    if ("lazy" in entry) {
+      throw new Error(
+        `Cannot read lazy file synchronously: '${path}'. Lazy files must be materialized before sync access.`,
+      );
+    }
+
+    if (entry.content instanceof Uint8Array) {
+      return entry.content;
+    }
+    return textEncoder.encode(entry.content);
+  }
+
+  rmSync(path: string, options?: RmOptions): void {
+    validatePath(path, "rm");
+    const normalized = normalizePath(path);
+    const entry = this.data.get(normalized);
+
+    if (!entry) {
+      if (options?.force) return;
+      throw new Error(`ENOENT: no such file or directory, rm '${path}'`);
+    }
+
+    if (entry.type === "directory") {
+      const children = this.readdirSync(normalized);
+      if (children.length > 0) {
+        if (!options?.recursive) {
+          throw new Error(`ENOTEMPTY: directory not empty, rm '${path}'`);
+        }
+        for (const child of children) {
+          const childPath = joinPath(normalized, child);
+          this.rmSync(childPath, options);
+        }
+      }
+    }
+
+    // Handle inode cleanup: orphan if open refs exist
+    const ino = this.pathToInode.get(normalized);
+    if (ino !== undefined) {
+      this.pathToInode.delete(normalized);
+      if ((this.ptrRefs.get(ino) ?? 0) > 0) {
+        this.orphanedInodes.add(ino);
+      } else {
+        this.inodeData.delete(ino);
+      }
+    }
+
+    this.data.delete(normalized);
+  }
+
+  readdirSync(path: string): string[] {
+    validatePath(path, "scandir");
+    let normalized = normalizePath(path);
+    let entry = this.data.get(normalized);
+
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory, scandir '${path}'`);
+    }
+
+    const seen = new Set<string>();
+    while (entry && entry.type === "symlink") {
+      if (seen.has(normalized)) {
+        throw new Error(`ELOOP: too many levels of symbolic links, scandir '${path}'`);
+      }
+      seen.add(normalized);
+      normalized = resolveSymlinkTarget(normalized, entry.target);
+      entry = this.data.get(normalized);
+    }
+
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory, scandir '${path}'`);
+    }
+    if (entry.type !== "directory") {
+      throw new Error(`ENOTDIR: not a directory, scandir '${path}'`);
+    }
+
+    const prefix = normalized === "/" ? "/" : `${normalized}/`;
+    const names = new Set<string>();
+
+    for (const [p] of this.data.entries()) {
+      if (p === normalized) continue;
+      if (p.startsWith(prefix)) {
+        const rest = p.slice(prefix.length);
+        const name = rest.split("/")[0];
+        if (name && !rest.includes("/", name.length)) {
+          names.add(name);
+        }
+      }
+    }
+
+    return Array.from(names).sort();
+  }
+
+  chmodSync(path: string, mode: number): void {
+    validatePath(path, "chmod");
+    const normalized = normalizePath(path);
+    const entry = this.data.get(normalized);
+
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory, chmod '${path}'`);
+    }
+
+    entry.mode = mode;
+  }
+
+  symlinkSync(target: string, linkPath: string): void {
+    validatePath(linkPath, "symlink");
+    const normalized = normalizePath(linkPath);
+
+    if (this.data.has(normalized)) {
+      throw new Error(`EEXIST: file already exists, symlink '${linkPath}'`);
+    }
+
+    this.ensureParentDirs(normalized);
+    this.data.set(normalized, {
+      type: "symlink",
+      target,
+      mode: SYMLINK_MODE,
+      mtime: new Date(),
+    });
+  }
+
+  readlinkSync(path: string): string {
+    validatePath(path, "readlink");
+    const normalized = normalizePath(path);
+    const entry = this.data.get(normalized);
+
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory, readlink '${path}'`);
+    }
+
+    if (entry.type !== "symlink") {
+      throw new Error(`EINVAL: invalid argument, readlink '${path}'`);
+    }
+
+    return entry.target;
+  }
+
+  mvSync(src: string, dest: string): void {
+    const srcNorm = normalizePath(src);
+    const destNorm = normalizePath(dest);
+
+    // For files, remap the inode (preserves open file handles)
+    const ino = this.pathToInode.get(srcNorm);
+    if (ino !== undefined) {
+      this.pathToInode.delete(srcNorm);
+      this.pathToInode.set(destNorm, ino);
+    }
+
+    this.cpSync(src, dest, { recursive: true });
+    // Remove source entry from data map without cleaning up inodes (already remapped)
+    const srcEntry = this.data.get(srcNorm);
+    if (srcEntry?.type === "directory") {
+      // For directories, cpSync deep-copies — just remove old data entries
+      this.rmSyncDataOnly(srcNorm);
+    } else {
+      this.data.delete(srcNorm);
+    }
+  }
+
+  /** Remove entries from the data map without touching inodes. */
+  private rmSyncDataOnly(path: string): void {
+    const normalized = normalizePath(path);
+    const entry = this.data.get(normalized);
+    if (!entry) return;
+    if (entry.type === "directory") {
+      const children = this.readdirSync(normalized);
+      for (const child of children) {
+        this.rmSyncDataOnly(joinPath(normalized, child));
+      }
+    }
+    this.data.delete(normalized);
+  }
+
+  // ── FilePtr-based I/O (mirrors Emscripten stream_ops) ──
+
+  open(path: string, flags: number): FilePtr {
+    const resolved = this.resolvePathWithSymlinks(path);
+    const O_CREAT = 64;
+    const O_TRUNC = 512;
+
+    let ino = this.pathToInode.get(resolved);
+    if (ino === undefined) {
+      if (!(flags & O_CREAT)) {
+        throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+      }
+      // Create the file
+      this.writeFileSync(path, new Uint8Array(0));
+      ino = this.pathToInode.get(resolved)!;
+    }
+
+    if (flags & O_TRUNC) {
+      this.inodeData.set(ino, new Uint8Array(0));
+      // Update the data map entry too
+      const entry = this.data.get(resolved);
+      if (entry?.type === "file" && "content" in entry) {
+        entry.content = new Uint8Array(0);
+      }
+    }
+
+    this.ptrRefs.set(ino, (this.ptrRefs.get(ino) ?? 0) + 1);
+    return ino;
+  }
+
+  close(ptr: FilePtr): void {
+    const refs = (this.ptrRefs.get(ptr) ?? 1) - 1;
+    if (refs <= 0) {
+      this.ptrRefs.delete(ptr);
+      if (this.orphanedInodes.has(ptr)) {
+        this.orphanedInodes.delete(ptr);
+        this.inodeData.delete(ptr);
+      }
+    } else {
+      this.ptrRefs.set(ptr, refs);
+    }
+  }
+
+  read(ptr: FilePtr, buffer: Uint8Array, offset: number, length: number, position: number): number {
+    const data = this.inodeData.get(ptr);
+    if (!data) return 0;
+    if (position >= data.length) return 0;
+    const end = Math.min(position + length, data.length);
+    const bytesRead = end - position;
+    buffer.set(data.subarray(position, end), offset);
+    return bytesRead;
+  }
+
+  write(ptr: FilePtr, buffer: Uint8Array, offset: number, length: number, position: number): number {
+    const existing = this.inodeData.get(ptr) ?? new Uint8Array(0);
+    const end = position + length;
+    if (end > existing.length) {
+      const grown = new Uint8Array(end);
+      grown.set(existing);
+      this.inodeData.set(ptr, grown);
+    }
+    const target = this.inodeData.get(ptr)!;
+    target.set(buffer.subarray(offset, offset + length), position);
+
+    // Keep the data map entry in sync for readFileBufferSync
+    this.syncDataEntry(ptr);
+    return length;
+  }
+
+  fstat(ptr: FilePtr): { size: number } {
+    const data = this.inodeData.get(ptr);
+    return { size: data?.length ?? 0 };
+  }
+
+  ftruncate(ptr: FilePtr, size: number): void {
+    const existing = this.inodeData.get(ptr) ?? new Uint8Array(0);
+    if (size >= existing.length) {
+      const grown = new Uint8Array(size);
+      grown.set(existing);
+      this.inodeData.set(ptr, grown);
+    } else {
+      this.inodeData.set(ptr, existing.slice(0, size));
+    }
+    this.syncDataEntry(ptr);
+  }
+
+  /** Keep the FsEntry in the data map in sync with inodeData after writes. */
+  private syncDataEntry(ino: number): void {
+    for (const [path, mappedIno] of this.pathToInode) {
+      if (mappedIno === ino) {
+        const entry = this.data.get(path);
+        if (entry?.type === "file" && "content" in entry) {
+          entry.content = this.inodeData.get(ino) ?? new Uint8Array(0);
+          entry.mtime = new Date();
+        }
+        break;
+      }
+    }
+  }
+
+  private cpSync(src: string, dest: string, options?: CpOptions): void {
+    validatePath(src, "cp");
+    validatePath(dest, "cp");
+    const srcNorm = normalizePath(src);
+    const destNorm = normalizePath(dest);
+    const srcEntry = this.data.get(srcNorm);
+
+    if (!srcEntry) {
+      throw new Error(`ENOENT: no such file or directory, cp '${src}'`);
+    }
+
+    if (srcEntry.type === "file") {
+      this.ensureParentDirs(destNorm);
+      if ("content" in srcEntry) {
+        const contentCopy =
+          srcEntry.content instanceof Uint8Array
+            ? new Uint8Array(srcEntry.content)
+            : srcEntry.content;
+        this.data.set(destNorm, { ...srcEntry, content: contentCopy });
+      } else {
+        this.data.set(destNorm, { ...srcEntry });
+      }
+    } else if (srcEntry.type === "symlink") {
+      this.ensureParentDirs(destNorm);
+      this.data.set(destNorm, { ...srcEntry });
+    } else if (srcEntry.type === "directory") {
+      if (!options?.recursive) {
+        throw new Error(`EISDIR: is a directory, cp '${src}'`);
+      }
+      this.mkdirSync(destNorm, { recursive: true });
+      const children = this.readdirSync(srcNorm);
+      for (const child of children) {
+        const srcChild = joinPath(srcNorm, child);
+        const destChild = joinPath(destNorm, child);
+        this.cpSync(srcChild, destChild, options);
+      }
+    }
   }
 }

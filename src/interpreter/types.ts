@@ -15,6 +15,7 @@ import type {
   CommandRegistry,
   ExecResult,
   FeatureCoverageWriter,
+  PyodideAssets,
   TraceCallback,
 } from "../types.js";
 
@@ -496,6 +497,10 @@ export interface InterpreterContext {
    * Threaded through the context chain instead of shell env.
    */
   jsBootstrapCode?: string;
+  /**
+   * Optional Pyodide asset overrides from the embedding shell.
+   */
+  pyodideAssets?: PyodideAssets;
   /**
    * Optional streaming output callback.
    * Nulled out inside command substitutions to prevent leaking internal output.

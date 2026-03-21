@@ -460,3 +460,161 @@ describe("InMemoryFs lazy files", () => {
     expect(provider).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("InMemoryFs FilePtr (unlink-while-open)", () => {
+  const O_RDONLY = 0;
+  const O_WRONLY = 1;
+  const O_RDWR = 2;
+  const O_CREAT = 64;
+  const O_TRUNC = 512;
+
+  it("open/read/write/close round-trip", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/f.txt", "hello");
+
+    const ptr = fs.open("/f.txt", O_RDWR);
+    const buf = new Uint8Array(5);
+    const n = fs.read(ptr, buf, 0, 5, 0);
+    expect(n).toBe(5);
+    expect(new TextDecoder().decode(buf)).toBe("hello");
+
+    fs.write(ptr, new TextEncoder().encode("world"), 0, 5, 5);
+    expect(fs.fstat(ptr).size).toBe(10);
+
+    fs.close(ptr);
+    expect(fs.readFileBufferSync("/f.txt")).toEqual(
+      new TextEncoder().encode("helloworld"),
+    );
+  });
+
+  it("read/write still work after unlink", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/tmp.txt", "before");
+
+    const ptr = fs.open("/tmp.txt", O_RDWR);
+    fs.rmSync("/tmp.txt");
+
+    // File is gone from the namespace
+    expect(fs.existsSync("/tmp.txt")).toBe(false);
+
+    // But FD still works
+    const buf = new Uint8Array(6);
+    expect(fs.read(ptr, buf, 0, 6, 0)).toBe(6);
+    expect(new TextDecoder().decode(buf)).toBe("before");
+
+    fs.write(ptr, new TextEncoder().encode("after!"), 0, 6, 0);
+    const buf2 = new Uint8Array(6);
+    fs.read(ptr, buf2, 0, 6, 0);
+    expect(new TextDecoder().decode(buf2)).toBe("after!");
+
+    fs.close(ptr);
+  });
+
+  it("fstat returns correct size on orphan", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/f.bin", new Uint8Array(100));
+
+    const ptr = fs.open("/f.bin", O_RDONLY);
+    expect(fs.fstat(ptr).size).toBe(100);
+
+    fs.rmSync("/f.bin");
+    expect(fs.fstat(ptr).size).toBe(100);
+
+    fs.close(ptr);
+  });
+
+  it("fstat updates after write to orphan", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/f.txt", "abc");
+
+    const ptr = fs.open("/f.txt", O_RDWR);
+    fs.rmSync("/f.txt");
+
+    expect(fs.fstat(ptr).size).toBe(3);
+    fs.write(ptr, new TextEncoder().encode("defgh"), 0, 5, 3);
+    expect(fs.fstat(ptr).size).toBe(8);
+
+    fs.close(ptr);
+  });
+
+  it("ftruncate on orphan", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/f.txt", "abcdefghij");
+
+    const ptr = fs.open("/f.txt", O_RDWR);
+    fs.rmSync("/f.txt");
+
+    fs.ftruncate(ptr, 3);
+    expect(fs.fstat(ptr).size).toBe(3);
+
+    const buf = new Uint8Array(10);
+    const n = fs.read(ptr, buf, 0, 10, 0);
+    expect(n).toBe(3);
+    expect(new TextDecoder().decode(buf.subarray(0, 3))).toBe("abc");
+
+    fs.close(ptr);
+  });
+
+  it("multiple FDs — pages survive until last close", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/shared.txt", "data");
+
+    const ptr1 = fs.open("/shared.txt", O_RDONLY);
+    const ptr2 = fs.open("/shared.txt", O_RDONLY);
+    expect(ptr1).toBe(ptr2); // same inode
+
+    fs.rmSync("/shared.txt");
+
+    // First close — still one ref
+    fs.close(ptr1);
+    const buf = new Uint8Array(4);
+    expect(fs.read(ptr2, buf, 0, 4, 0)).toBe(4);
+    expect(new TextDecoder().decode(buf)).toBe("data");
+
+    // Second close — orphan cleaned up
+    fs.close(ptr2);
+  });
+
+  it("O_CREAT creates file if missing", () => {
+    const fs = new InMemoryFs();
+    const ptr = fs.open("/new.txt", O_WRONLY | O_CREAT);
+    fs.write(ptr, new TextEncoder().encode("created"), 0, 7, 0);
+    fs.close(ptr);
+
+    expect(fs.readFileBufferSync("/new.txt")).toEqual(
+      new TextEncoder().encode("created"),
+    );
+  });
+
+  it("O_TRUNC truncates existing file", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/f.txt", "existing content");
+
+    const ptr = fs.open("/f.txt", O_WRONLY | O_TRUNC);
+    expect(fs.fstat(ptr).size).toBe(0);
+    fs.close(ptr);
+  });
+
+  it("write past EOF grows the file", () => {
+    const fs = new InMemoryFs();
+    fs.writeFileSync("/f.txt", "ab");
+
+    const ptr = fs.open("/f.txt", O_RDWR);
+    fs.rmSync("/f.txt");
+
+    // Write at position 10 — gap should be zero-filled
+    fs.write(ptr, new TextEncoder().encode("xy"), 0, 2, 10);
+    expect(fs.fstat(ptr).size).toBe(12);
+
+    const buf = new Uint8Array(12);
+    fs.read(ptr, buf, 0, 12, 0);
+    // Bytes 0-1: "ab", 2-9: zeros, 10-11: "xy"
+    expect(buf[0]).toBe(97); // 'a'
+    expect(buf[1]).toBe(98); // 'b'
+    expect(buf[5]).toBe(0);
+    expect(buf[10]).toBe(120); // 'x'
+    expect(buf[11]).toBe(121); // 'y'
+
+    fs.close(ptr);
+  });
+});

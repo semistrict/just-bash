@@ -138,4 +138,25 @@ describe("chmod command", () => {
       expect(result.exitCode).toBe(0);
     });
   });
+
+  describe("chmod + ls integration", () => {
+    it("chmod +x should be visible in ls -al output", async () => {
+      const env = new Bash();
+      await env.exec("echo 'hello' > /tmp/script.sh");
+      await env.exec("chmod +x /tmp/script.sh");
+      const result = await env.exec("ls -al /tmp/script.sh");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("rwx");
+    });
+
+    it("chmod +x should persist across bash calls", async () => {
+      const env = new Bash();
+      await env.exec("echo '#!/bin/bash' > /tmp/run.sh");
+      await env.exec("chmod +x /tmp/run.sh");
+      const result = await env.exec("ls -l /tmp/run.sh");
+      expect(result.exitCode).toBe(0);
+      // Default file mode is 644. +x adds execute for all → 755
+      expect(result.stdout).toContain("rwx");
+    });
+  });
 });
